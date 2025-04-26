@@ -4,7 +4,35 @@ $base_dir = './content';  // Base directory containing media files
 $thumbs_dir = './thumbs';  // Directory for generated thumbnails
 $thumb_width = 200;       // Thumbnail width in pixels
 
-// Create thumbnail directory if it doesn't exist
+// Directory navigation links - add your custom links here
+$nav_links = [
+    // Format: 'Display Name' => 'path/to/directory'
+    'Main Gallery' => './content',
+    'Family Photos' => './family',
+    'Vacation 2024' => './vacation_2024',
+    'Work Media' => './work_media',
+    // Add more directory links as needed
+];
+
+// External links - these will open directly in the browser without processing
+$external_links = [
+    'My Protected Site' => 'https://example.com/password-protected/',
+    'Private Photos' => 'https://photos.example.com/private/',
+    // Add more links as needed
+];
+
+// Get the current directory from URL or use default
+$current_dir = isset($_GET['dir']) ? $_GET['dir'] : $base_dir;
+// Validate directory for security
+if (!is_dir($current_dir) || strpos(realpath($current_dir), realpath('./')) !== 0) {
+    $current_dir = $base_dir;
+}
+
+// Create content and thumbnail directories if they don't exist
+if (!file_exists($base_dir)) {
+    mkdir($base_dir, 0755, true);
+}
+
 if (!file_exists($thumbs_dir)) {
     mkdir($thumbs_dir, 0755, true);
 }
@@ -46,9 +74,42 @@ function create_thumbnail($source, $destination, $width) {
     imagedestroy($img);
 }
 
+// Function to extract creation date from video metadata using FFmpeg
+function get_video_creation_date($video_path) {
+    $command = "ffprobe -v quiet -print_format json -show_format \"{$video_path}\"";
+    $output = shell_exec($command);
+    $metadata = json_decode($output, true);
+    
+    // Check various metadata fields that might contain creation date
+    if (!empty($metadata) && isset($metadata['format']) && isset($metadata['format']['tags'])) {
+        $tags = $metadata['format']['tags'];
+        
+        // Try different possible tag names for creation date
+        $date_keys = ['creation_time', 'date', 'DateTimeOriginal', 'com.apple.quicktime.creationdate'];
+        
+        foreach ($date_keys as $key) {
+            if (isset($tags[$key])) {
+                // Try to parse the date in various formats
+                $date = strtotime($tags[$key]);
+                if ($date !== false) {
+                    return $date;
+                }
+            }
+        }
+    }
+    
+    // If no valid date found in metadata, fall back to file modification time
+    return filemtime($video_path);
+}
+
 // Fix issue in get_media_files function
 function get_media_files($dir) {
     $files = array();
+    
+    // Check if directory exists and is not empty
+    if (!file_exists($dir) || !is_dir($dir) || count(scandir($dir)) <= 2) {
+        return $files; // Return empty array if directory doesn't exist or is empty
+    }
     
     $iterator = new RecursiveIteratorIterator(
         new RecursiveDirectoryIterator($dir, RecursiveDirectoryIterator::SKIP_DOTS),
@@ -85,6 +146,14 @@ function get_media_files($dir) {
             } else if (preg_match('/\.(mp4|webm)$/i', $filename)) {
                 // Set video type manually
                 $type = preg_match('/\.mp4$/i', $filename) ? 'video/mp4' : 'video/webm';
+                
+                // Extract creation date from video metadata
+                $taken = get_video_creation_date($path);
+            }
+            
+            // If no taken date found, use modification time
+            if ($taken == 0) {
+                $taken = $file_info->getMTime();
             }
             
             $files[] = array(
@@ -92,7 +161,8 @@ function get_media_files($dir) {
                 'type' => $type,
                 'modified' => $file_info->getMTime(),
                 'taken' => $taken,
-                'size' => $file_info->getSize()
+                'size' => $file_info->getSize(),
+                'name' => $filename
             );
         }
     }
@@ -100,16 +170,37 @@ function get_media_files($dir) {
     return $files;
 }
 
-// Function to create video thumbnails
+// Function to create video thumbnails - fixed to extract a static image
 function create_video_thumbnail($source, $destination) {
-    // Generate thumbnail using ffmpeg (assumes ffmpeg is available)
-    exec("ffmpeg -i {$source} -ss 00:00:10 -vframes 1 {$destination}");
+    // Calculate thumbnail dimensions (maintain aspect ratio)
+    global $thumb_width;
+    $thumb_height = $thumb_width; // Default square, will be adjusted if needed
+    
+    // Extract a single frame at 1 second mark and save as JPEG
+    $command = "ffmpeg -i \"{$source}\" -ss 00:00:01 -vframes 1 -s {$thumb_width}x{$thumb_height} -f image2 \"{$destination}\"";
+    exec($command);
+    
+    // Check if thumbnail was created, if not try again with different timestamp
+    if (!file_exists($destination) || filesize($destination) == 0) {
+        $command = "ffmpeg -i \"{$source}\" -ss 00:00:10 -vframes 1 -s {$thumb_width}x{$thumb_height} -f image2 \"{$destination}\"";
+        exec($command);
+    }
+    
+    // If still fails, create an empty placeholder
+    if (!file_exists($destination) || filesize($destination) == 0) {
+        // Create a black placeholder with text
+        $img = imagecreatetruecolor($thumb_width, $thumb_height);
+        $text_color = imagecolorallocate($img, 255, 255, 255);
+        $bg_color = imagecolorallocate($img, 0, 0, 0);
+        imagefilledrectangle($img, 0, 0, $thumb_width, $thumb_height, $bg_color);
+        imagestring($img, 3, $thumb_width/4, $thumb_height/2, "Video", $text_color);
+        imagejpeg($img, $destination, 90);
+        imagedestroy($img);
+    }
 }
 
 // Main logic
-$media_files = get_media_files($base_dir);
-
-// Add this code before the HTML output to handle sorting
+$media_files = get_media_files($current_dir);
 
 // Get sort parameter from URL
 $sort = isset($_GET['sort']) ? $_GET['sort'] : 'modified_desc';
@@ -117,19 +208,94 @@ $sort = isset($_GET['sort']) ? $_GET['sort'] : 'modified_desc';
 // Sort the media files based on the selected criteria
 usort($media_files, function($a, $b) use ($sort) {
     switch($sort) {
+        case 'name_asc':
+            return strcasecmp($a['name'], $b['name']);
+        case 'name_desc':
+            return strcasecmp($b['name'], $a['name']);
         case 'modified_asc':
             return $a['modified'] - $b['modified'];
+        case 'modified_desc':
+            return $b['modified'] - $a['modified'];
+        case 'taken_asc':
+            return $a['taken'] - $b['taken'];
         case 'taken_desc':
-            // If taken date is available use it, otherwise fall back to modified date
-            $a_date = $a['taken'] > 0 ? $a['taken'] : $a['modified'];
-            $b_date = $b['taken'] > 0 ? $b['taken'] : $b['modified'];
-            return $b_date - $a_date;
+            return $b['taken'] - $a['taken'];
         case 'size_desc':
             return $b['size'] - $a['size'];
-        case 'modified_desc':
         default:
             return $b['modified'] - $a['modified'];
     }
+});
+
+// After sorting media files, group them by date, size or name
+$grouped_files = [];
+
+if ($sort == 'size_desc') {
+    // Define size ranges
+    $size_ranges = [
+        'Less than 5MB' => function($size) { return $size < 5 * 1024 * 1024; },
+        '5MB to 25MB' => function($size) { return $size >= 5 * 1024 * 1024 && $size < 25 * 1024 * 1024; },
+        '25MB to 50MB' => function($size) { return $size >= 25 * 1024 * 1024 && $size < 50 * 1024 * 1024; },
+        '50MB to 250MB' => function($size) { return $size >= 50 * 1024 * 1024 && $size < 250 * 1024 * 1024; },
+        '250MB to 500MB' => function($size) { return $size >= 250 * 1024 * 1024 && $size < 500 * 1024 * 1024; },
+        '500MB to 1TB' => function($size) { return $size >= 500 * 1024 * 1024 && $size < 1024 * 1024 * 1024 * 1024; },
+    ];
+    
+    // Group files by size range
+    foreach ($media_files as $file) {
+        foreach ($size_ranges as $range_name => $condition) {
+            if ($condition($file['size'])) {
+                if (!isset($grouped_files[$range_name])) {
+                    $grouped_files[$range_name] = [];
+                }
+                $grouped_files[$range_name][] = $file;
+                break;
+            }
+        }
+    }
+} else if ($sort == 'name_asc' || $sort == 'name_desc') {
+    // Group files by first letter of filename
+    foreach ($media_files as $file) {
+        $first_letter = strtoupper(substr($file['name'], 0, 1));
+        if (!ctype_alpha($first_letter)) {
+            $first_letter = '#'; // Group non-alphabetic starts together
+        }
+        
+        if (!isset($grouped_files[$first_letter])) {
+            $grouped_files[$first_letter] = [];
+        }
+        
+        $grouped_files[$first_letter][] = $file;
+    }
+    
+    // Sort the groups alphabetically
+    ksort($grouped_files);
+} else {
+    // Group files by date (either modified or taken date depending on sort)
+    $date_field = (strpos($sort, 'taken') === 0) ? 'taken' : 'modified';
+    
+    foreach ($media_files as $file) {
+        $date = $file[$date_field];
+        $day = date('Y-m-d', $date);
+        
+        if (!isset($grouped_files[$day])) {
+            $grouped_files[$day] = [];
+        }
+        
+        $grouped_files[$day][] = $file;
+    }
+    
+    // For date sorting, make sure groups are in correct order
+    if ($sort == 'modified_asc' || $sort == 'taken_asc') {
+        ksort($grouped_files);
+    } else {
+        krsort($grouped_files);
+    }
+}
+
+// Filter out empty groups
+$grouped_files = array_filter($grouped_files, function($group) {
+    return count($group) > 0;
 });
 
 // Generate thumbnails for each media file
@@ -153,61 +319,241 @@ foreach ($media_files as $file) {
     }
 }
 
+// Get current directory name for display
+$current_dir_name = basename($current_dir);
+if ($current_dir_name == '.' || $current_dir_name == '') {
+    $current_dir_name = 'Media Gallery';
+}
+
 // Simple HTML viewer
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Media Gallery</title>
+    <title><?= htmlspecialchars($current_dir_name) ?> - Media Gallery</title>
     <style>
         body {
             font-family: Arial, sans-serif;
             margin: 0;
-            padding: 20px;
+            padding: 0;
             background-color: #f5f5f5;
+            display: flex;
+            min-height: 100vh;
+        }
+        
+        .sidebar {
+            width: 250px;
+            min-width: 250px;
+            max-width: 250px;
+            background-color: #2c3e50;
+            padding: 20px;
+            overflow-y: auto;
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            color: white;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+        }
+        
+        .sidebar-header {
+            margin-bottom: 20px;
+            text-align: center;
         }
         
         .controls {
-            margin-bottom: 1rem;
-            display: flex;
-            gap: 0.5rem;
-            justify-content: center;
+            margin-bottom: 1.5rem;
         }
         
         .controls select {
-            padding: 8px 16px;
+            width: 100%;
+            padding: 8px 12px;
             border-radius: 4px;
             border: 1px solid #ddd;
+            background: #34495e;
+            color: white;
         }
         
-        .gallery {
-            column-count: 4;
-            column-gap: 15px;
+        .controls .group {
+            margin-bottom: 10px;
+        }
+        
+        .controls .group-label {
+            font-size: 0.9em;
+            opacity: 0.8;
+            margin-bottom: 5px;
+            display: block;
+        }
+        
+        .group-controls {
+            display: flex;
+            margin-bottom: 10px;
+            gap: 10px;
+        }
+        
+        .group-controls button {
+            flex: 1;
+            background: #34495e;
+            color: white;
+            border: none;
+            padding: 8px 0;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: background 0.2s;
+        }
+        
+        .group-controls button:hover {
+            background: #3498db;
+        }
+        
+        .group-nav {
+            margin-top: 20px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            padding-top: 15px;
+        }
+        
+        .nav-section {
+            margin-bottom: 20px;
+        }
+        
+        .nav-section-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            font-size: 0.8em;
+            letter-spacing: 1px;
+            color: rgba(255, 255, 255, 0.6);
+        }
+        
+        .folder-nav {
+            margin-bottom: 20px;
+        }
+        
+        .folder-nav-item {
+            padding: 10px 15px;
+            border-radius: 4px;
+            margin-bottom: 5px;
+            cursor: pointer;
+            transition: background 0.2s;
+            display: flex;
+            align-items: center;
+        }
+        
+        .folder-nav-item:hover {
+            background: #34495e;
+        }
+        
+        .folder-nav-item.active {
+            background: #3498db;
+        }
+        
+        .folder-icon {
+            margin-right: 10px;
+            font-size: 1.2em;
+        }
+        
+        .group-nav-item {
+            padding: 10px 15px;
+            border-radius: 4px;
+            margin-bottom: 5px;
+            cursor: pointer;
+            transition: background 0.2s;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .group-nav-item:hover {
+            background: #34495e;
+        }
+        
+        .group-nav-item.active {
+            background: #3498db;
+        }
+        
+        .group-nav-item .badge {
+            background: rgba(255,255,255,0.2);
+            border-radius: 10px;
+            padding: 2px 8px;
+            font-size: 0.8em;
+            min-width: 24px;
+            text-align: center;
+        }
+        
+        .group-name {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 180px;
+        }
+        
+        .content {
+            flex-grow: 1;
+            padding: 20px;
+            overflow-y: auto;
+        }
+        
+        .date-section {
+            margin-bottom: 40px;
+        }
+        
+        .date-header {
+            margin-bottom: 15px;
+            padding: 10px;
+            background: #3498db;
+            color: white;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        
+        .date-gallery {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            grid-gap: 15px;
             width: 100%;
         }
         
-        @media (max-width: 1200px) {
-            .gallery {
-                column-count: 3;
+        @media (min-width: 1200px) {
+            .date-gallery {
+                grid-template-columns: repeat(4, 1fr);
             }
         }
         
-        @media (max-width: 800px) {
-            .gallery {
-                column-count: 2;
+        @media (max-width: 1199px) and (min-width: 900px) {
+            .date-gallery {
+                grid-template-columns: repeat(3, 1fr);
             }
         }
         
-        @media (max-width: 500px) {
-            .gallery {
-                column-count: 1;
+        @media (max-width: 899px) and (min-width: 600px) {
+            .date-gallery {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+        
+        @media (max-width: 599px) {
+            .date-gallery {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        @media (max-width: 700px) {
+            body {
+                flex-direction: column;
+            }
+            
+            .sidebar {
+                width: auto;
+                height: auto;
+                min-width: auto;
+                max-width: none;
+                position: relative;
             }
         }
         
         .item {
             break-inside: avoid;
-            margin-bottom: 15px;
             position: relative;
             border-radius: 8px;
             overflow: hidden;
@@ -215,6 +561,7 @@ foreach ($media_files as $file) {
             background: white;
             cursor: pointer;
             transition: transform 0.2s ease;
+            aspect-ratio: 1;
         }
         
         .item:hover {
@@ -223,9 +570,10 @@ foreach ($media_files as $file) {
         
         .item img, .item video {
             width: 100%;
-            height: auto;
+            height: 100%;
             display: block;
             border-radius: 8px;
+            object-fit: cover;
         }
         
         .info {
@@ -241,6 +589,13 @@ foreach ($media_files as $file) {
             transition: opacity 0.3s;
         }
         
+        .info-filename {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 100%;
+        }
+        
         .item:hover .info {
             opacity: 1;
         }
@@ -254,6 +609,10 @@ foreach ($media_files as $file) {
             font-size: 50px;
             opacity: 0.8;
             pointer-events: none;
+        }
+        
+        .group-hidden {
+            display: none;
         }
         
         /* Lightbox styles */
@@ -305,40 +664,159 @@ foreach ($media_files as $file) {
             align-items: center;
             justify-content: center;
         }
+        
+        /* Empty state styling */
+        .empty-state {
+            text-align: center;
+            padding: 50px 20px;
+            color: #7f8c8d;
+        }
+        
+        .empty-state h3 {
+            margin-bottom: 15px;
+            font-size: 24px;
+        }
+        
+        .empty-state p {
+            margin-bottom: 25px;
+            font-size: 16px;
+        }
     </style>
 </head>
 <body>
-    <div class="controls">
-        <select id="sortBy" onchange="location.href='?sort='+this.value">
-            <option value="modified_desc" <?= $sort == 'modified_desc' ? 'selected' : '' ?>>Newest First</option>
-            <option value="modified_asc" <?= $sort == 'modified_asc' ? 'selected' : '' ?>>Oldest First</option>
-            <option value="taken_desc" <?= $sort == 'taken_desc' ? 'selected' : '' ?>>By Capture Date</option>
-            <option value="size_desc" <?= $sort == 'size_desc' ? 'selected' : '' ?>>Largest Files</option>
-        </select>
-    </div>
-
-    <div class="gallery" id="gallery">
-        <?php foreach ($media_files as $index => $file): ?>
-        <div class="item" data-index="<?= $index ?>">
-            <?php if (strpos($file['type'], 'video/') === 0): ?>
-                <video poster="<?= $thumbs_dir . '/' . basename($file['path']) ?>">
-                    <source src="<?= $file['path'] ?>" type="<?= $file['type'] ?>">
-                </video>
-                <div class="play-button">▶</div>
-            <?php else: ?>
-                <img src="<?= $thumbs_dir . '/' . basename($file['path']) ?>" 
-                     alt="<?= basename($file['path']) ?>"
-                     loading="lazy">
+    <!-- Sidebar with navigation and controls -->
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <h2><?= htmlspecialchars($current_dir_name) ?></h2>
+        </div>
+        
+        <!-- Directory navigation -->
+        <div class="folder-nav">
+            <div class="nav-section-title">Local Folders</div>
+            <?php foreach ($nav_links as $name => $path): ?>
+            <a href="?dir=<?= urlencode($path) ?>&sort=<?= $sort ?>" style="text-decoration: none; color: inherit;">
+                <div class="folder-nav-item <?= $path == $current_dir ? 'active' : '' ?>">
+                    <span class="folder-icon">📁</span>
+                    <span class="group-name"><?= htmlspecialchars($name) ?></span>
+                </div>
+            </a>
+            <?php endforeach; ?>
+            
+            <?php if (!empty($external_links)): ?>
+            <div class="nav-section-title" style="margin-top: 20px;">External Links</div>
+            <?php foreach ($external_links as $name => $url): ?>
+            <a href="<?= htmlspecialchars($url) ?>" target="_blank" style="text-decoration: none; color: inherit;">
+                <div class="folder-nav-item">
+                    <span class="folder-icon">🔗</span>
+                    <span class="group-name"><?= htmlspecialchars($name) ?></span>
+                </div>
+            </a>
+            <?php endforeach; ?>
             <?php endif; ?>
-            <div class="info">
-                <?= basename($file['path']) ?><br>
-                Size: <?= round($file['size'] / 1024 / 1024, 1) ?> MB
-                <?php if ($file['taken'] > 0): ?>
-                    <br>Taken: <?= date('Y-m-d H:i', $file['taken']) ?>
-                <?php endif; ?>
+        </div>
+        
+        <div class="controls">
+            <div class="group">
+                <span class="group-label">By Last Modified Date</span>
+                <select id="sortByModified" onchange="location.href='?dir=<?= urlencode($current_dir) ?>&sort='+this.value">
+                    <option value="modified_desc" <?= $sort == 'modified_desc' ? 'selected' : '' ?>>File Date - Newest First</option>
+                    <option value="modified_asc" <?= $sort == 'modified_asc' ? 'selected' : '' ?>>File Date - Oldest First</option>
+                </select>
+            </div>
+            
+            <div class="group">
+                <span class="group-label">By Date Taken</span>
+                <select id="sortByTaken" onchange="location.href='?dir=<?= urlencode($current_dir) ?>&sort='+this.value">
+                    <option value="taken_desc" <?= $sort == 'taken_desc' ? 'selected' : '' ?>>Media Date - Newest First</option>
+                    <option value="taken_asc" <?= $sort == 'taken_asc' ? 'selected' : '' ?>>Media Date - Oldest First</option>
+                </select>
+            </div>
+            
+            <div class="group">
+                <span class="group-label">Other Sorting</span>
+                <select id="sortByOther" onchange="location.href='?dir=<?= urlencode($current_dir) ?>&sort='+this.value">
+                    <option value="size_desc" <?= $sort == 'size_desc' ? 'selected' : '' ?>>By Size</option>
+                    <option value="name_asc" <?= $sort == 'name_asc' ? 'selected' : '' ?>>By Name (A-Z)</option>
+                    <option value="name_desc" <?= $sort == 'name_desc' ? 'selected' : '' ?>>By Name (Z-A)</option>
+                </select>
             </div>
         </div>
-        <?php endforeach; ?>
+        
+        <?php if (!empty($grouped_files)): ?>
+        <div class="group-nav">
+            <div class="nav-section-title">Groups</div>
+            <div class="group-controls">
+                <button id="expand-all">Expand All</button>
+                <button id="collapse-all">Collapse All</button>
+            </div>
+            
+            <?php foreach ($grouped_files as $group_name => $files): ?>
+            <div class="group-nav-item active" data-group="<?= md5($group_name) ?>">
+                <div class="group-name">
+                    <?php if ($sort == 'size_desc'): ?>
+                        <?= $group_name ?>
+                    <?php elseif ($sort == 'name_asc' || $sort == 'name_desc'): ?>
+                        <?= $group_name ?>
+                    <?php else: ?>
+                        <?= date('M j, Y', strtotime($group_name)) ?>
+                    <?php endif; ?>
+                </div>
+                <span class="badge"><?= count($files) ?></span>
+            </div>
+            <?php endforeach; ?>
+        </div>
+        <?php endif; ?>
+    </div>
+
+    <!-- Main content area with the gallery -->
+    <div class="content">
+        <?php if (empty($grouped_files)): ?>
+            <div class="empty-state">
+                <h3>No media files found</h3>
+                <p>There are no images or videos in this directory yet.</p>
+                <p>Upload some media files to the "<?= htmlspecialchars($current_dir) ?>" directory to get started.</p>
+            </div>
+        <?php else: ?>
+            <?php 
+            $global_index = 0;
+            foreach ($grouped_files as $group_name => $files): 
+            ?>
+                <div class="date-section" id="group-<?= md5($group_name) ?>">
+                    <div class="date-header">
+                        <?php if ($sort == 'size_desc'): ?>
+                            <?= $group_name ?>
+                        <?php elseif ($sort == 'name_asc' || $sort == 'name_desc'): ?>
+                            <?= $group_name == '#' ? 'Other' : "Files starting with '$group_name'" ?>
+                        <?php else: ?>
+                            <?= date('l, F j, Y', strtotime($group_name)) ?>
+                        <?php endif; ?>
+                    </div>
+                    <div class="date-gallery">
+                        <?php foreach ($files as $file): ?>
+                        <div class="item" data-index="<?= $global_index++ ?>">
+                            <?php if (strpos($file['type'], 'video/') === 0): ?>
+                                <video poster="<?= $thumbs_dir . '/' . basename($file['path']) ?>">
+                                    <source src="<?= $file['path'] ?>" type="<?= $file['type'] ?>">
+                                </video>
+                                <div class="play-button">▶</div>
+                            <?php else: ?>
+                                <img src="<?= $thumbs_dir . '/' . basename($file['path']) ?>" 
+                                    alt="<?= basename($file['path']) ?>"
+                                    loading="lazy">
+                            <?php endif; ?>
+                            <div class="info">
+                                <div class="info-filename"><?= basename($file['path']) ?></div>
+                                Size: <?= round($file['size'] / 1024 / 1024, 1) ?> MB
+                                <?php if ($file['taken'] > 0): ?>
+                                    <br>Taken: <?= date('Y-m-d H:i', $file['taken']) ?>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+        <?php endif; ?>
     </div>
     
     <!-- Lightbox container -->
@@ -349,10 +827,30 @@ foreach ($media_files as $file) {
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
+            // Create a fixed array of all media files for the lightbox
+            const allMediaFiles = [];
+            <?php 
+            $index = 0;
+            foreach ($grouped_files as $group_name => $files): 
+                foreach ($files as $file): 
+            ?>
+                allMediaFiles[<?= $index++ ?>] = <?= json_encode($file) ?>;
+            <?php 
+                endforeach; 
+            endforeach; 
+            ?>
+            
             // Set the selected option based on the current URL parameter
-            const sortBy = new URLSearchParams(window.location.search).get('sort');
+            const urlParams = new URLSearchParams(window.location.search);
+            const sortBy = urlParams.get('sort');
             if (sortBy) {
-                document.getElementById('sortBy').value = sortBy;
+                if (sortBy.startsWith('modified_')) {
+                    document.getElementById('sortByModified').value = sortBy;
+                } else if (sortBy.startsWith('taken_')) {
+                    document.getElementById('sortByTaken').value = sortBy;
+                } else {
+                    document.getElementById('sortByOther').value = sortBy;
+                }
             }
             
             // Initialize lightbox
@@ -360,13 +858,59 @@ foreach ($media_files as $file) {
             const lightboxContent = document.getElementById('lightbox-content');
             const closeButton = document.querySelector('.close-lightbox');
             const items = document.querySelectorAll('.item');
-            const mediaFiles = <?= json_encode($media_files) ?>;
+            
+            // Handle group navigation
+            const groupNavItems = document.querySelectorAll('.group-nav-item');
+            groupNavItems.forEach(item => {
+                item.addEventListener('click', function() {
+                    const groupId = this.getAttribute('data-group');
+                    const groupItems = document.getElementById('group-' + groupId);
+                    
+                    // Toggle visibility
+                    if (this.classList.contains('active')) {
+                        this.classList.remove('active');
+                        groupItems.classList.add('group-hidden');
+                    } else {
+                        this.classList.add('active');
+                        groupItems.classList.remove('group-hidden');
+                    }
+                    
+                    // Scroll to the group if it's being shown
+                    if (!groupItems.classList.contains('group-hidden')) {
+                        groupItems.scrollIntoView({ behavior: 'smooth' });
+                    }
+                });
+            });
+            
+            // Handle expand/collapse all functionality
+            const expandAllBtn = document.getElementById('expand-all');
+            const collapseAllBtn = document.getElementById('collapse-all');
+            
+            if (expandAllBtn && collapseAllBtn) {
+                expandAllBtn.addEventListener('click', function() {
+                    groupNavItems.forEach(item => {
+                        item.classList.add('active');
+                        const groupId = item.getAttribute('data-group');
+                        const groupItems = document.getElementById('group-' + groupId);
+                        groupItems.classList.remove('group-hidden');
+                    });
+                });
+                
+                collapseAllBtn.addEventListener('click', function() {
+                    groupNavItems.forEach(item => {
+                        item.classList.remove('active');
+                        const groupId = item.getAttribute('data-group');
+                        const groupItems = document.getElementById('group-' + groupId);
+                        groupItems.classList.add('group-hidden');
+                    });
+                });
+            }
             
             // Open lightbox when clicking an item
             items.forEach(item => {
                 item.addEventListener('click', function() {
                     const index = parseInt(this.getAttribute('data-index'));
-                    const file = mediaFiles[index];
+                    const file = allMediaFiles[index];
                     
                     lightboxContent.innerHTML = '';
                     
