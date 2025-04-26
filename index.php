@@ -1,23 +1,18 @@
 <?php
 // Configuration
-$base_dir = './content';  // Base directory containing media files
+$base_dir = './pics';  // Base directory containing media files
 $thumbs_dir = './thumbs';  // Directory for generated thumbnails
 $thumb_width = 200;       // Thumbnail width in pixels
 
 // Directory navigation links - add your custom links here
 $nav_links = [
     // Format: 'Display Name' => 'path/to/directory'
-    'Main Gallery' => './content',
-    'Family Photos' => './family',
-    'Vacation 2024' => './vacation_2024',
-    'Work Media' => './work_media',
     // Add more directory links as needed
 ];
 
 // External links - these will open directly in the browser without processing
 $external_links = [
-    'My Protected Site' => 'https://example.com/password-protected/',
-    'Private Photos' => 'https://photos.example.com/private/',
+    'Google' => 'https://google.com',
     // Add more links as needed
 ];
 
@@ -227,10 +222,74 @@ usort($media_files, function($a, $b) use ($sort) {
     }
 });
 
+// Filter the media files by type if a type filter is selected
+if (strpos($sort, 'type_') === 0) {
+    switch ($sort) {
+        case 'type_all':
+            // No filtering needed
+            break;
+        case 'type_image':
+            $media_files = array_filter($media_files, function($file) {
+                return strpos($file['path'], '.jpg') !== false || 
+                       strpos($file['path'], '.jpeg') !== false || 
+                       strpos($file['path'], '.png') !== false;
+            });
+            break;
+        case 'type_video':
+            $media_files = array_filter($media_files, function($file) {
+                return strpos($file['path'], '.mp4') !== false || 
+                       strpos($file['path'], '.webm') !== false;
+            });
+            break;
+        case 'type_jpg':
+            $media_files = array_filter($media_files, function($file) {
+                return strpos($file['path'], '.jpg') !== false || 
+                       strpos($file['path'], '.jpeg') !== false;
+            });
+            break;
+        case 'type_png':
+            $media_files = array_filter($media_files, function($file) {
+                return strpos($file['path'], '.png') !== false;
+            });
+            break;
+        case 'type_mp4':
+            $media_files = array_filter($media_files, function($file) {
+                return strpos($file['path'], '.mp4') !== false;
+            });
+            break;
+        case 'type_webm':
+            $media_files = array_filter($media_files, function($file) {
+                return strpos($file['path'], '.webm') !== false;
+            });
+            break;
+    }
+    
+    // Use modified_desc as default sorting when filtering by type
+    usort($media_files, function($a, $b) {
+        return $b['modified'] - $a['modified'];
+    });
+}
+
 // After sorting media files, group them by date, size or name
 $grouped_files = [];
 
-if ($sort == 'size_desc') {
+// Special handling for type filters
+if (strpos($sort, 'type_') === 0 && $sort !== 'type_all') {
+    // For type filters, we'll group by date
+    foreach ($media_files as $file) {
+        $date = $file['modified'];
+        $day = date('Y-m-d', $date);
+        
+        if (!isset($grouped_files[$day])) {
+            $grouped_files[$day] = [];
+        }
+        
+        $grouped_files[$day][] = $file;
+    }
+    
+    // Sort the groups by date (newest first)
+    krsort($grouped_files);
+} else if ($sort == 'size_desc') {
     // Define size ranges
     $size_ranges = [
         'Less than 5MB' => function($size) { return $size < 5 * 1024 * 1024; },
@@ -681,6 +740,41 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             margin-bottom: 25px;
             font-size: 16px;
         }
+
+        .lightbox-nav {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 1000;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 20px;
+        }
+
+        .lightbox-prev, .lightbox-next {
+            background: rgba(0,0,0,0.5);
+            color: white;
+            border: none;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            font-size: 30px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            pointer-events: auto;
+            transition: background 0.2s, transform 0.2s;
+        }
+
+        .lightbox-prev:hover, .lightbox-next:hover {
+            background: rgba(0,0,0,0.8);
+            transform: scale(1.1);
+        }
     </style>
 </head>
 <body>
@@ -738,6 +832,14 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                     <option value="size_desc" <?= $sort == 'size_desc' ? 'selected' : '' ?>>By Size</option>
                     <option value="name_asc" <?= $sort == 'name_asc' ? 'selected' : '' ?>>By Name (A-Z)</option>
                     <option value="name_desc" <?= $sort == 'name_desc' ? 'selected' : '' ?>>By Name (Z-A)</option>
+                    <option disabled>───── By File Type ─────</option>
+                    <option value="type_all" <?= $sort == 'type_all' ? 'selected' : '' ?>>All Files</option>
+                    <option value="type_image" <?= $sort == 'type_image' ? 'selected' : '' ?>>Images Only (jpg, png)</option>
+                    <option value="type_video" <?= $sort == 'type_video' ? 'selected' : '' ?>>Videos Only (mp4, webm)</option>
+                    <option value="type_jpg" <?= $sort == 'type_jpg' ? 'selected' : '' ?>>JPEG Only</option>
+                    <option value="type_png" <?= $sort == 'type_png' ? 'selected' : '' ?>>PNG Only</option>
+                    <option value="type_mp4" <?= $sort == 'type_mp4' ? 'selected' : '' ?>>MP4 Videos Only</option>
+                    <option value="type_webm" <?= $sort == 'type_webm' ? 'selected' : '' ?>>WebM Videos Only</option>
                 </select>
             </div>
         </div>
@@ -757,6 +859,8 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                         <?= $group_name ?>
                     <?php elseif ($sort == 'name_asc' || $sort == 'name_desc'): ?>
                         <?= $group_name ?>
+                    <?php elseif (strpos($sort, 'type_') === 0 && $sort !== 'type_all'): ?>
+                        <?= date('M j, Y', strtotime($group_name)) ?>
                     <?php else: ?>
                         <?= date('M j, Y', strtotime($group_name)) ?>
                     <?php endif; ?>
@@ -787,6 +891,19 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                             <?= $group_name ?>
                         <?php elseif ($sort == 'name_asc' || $sort == 'name_desc'): ?>
                             <?= $group_name == '#' ? 'Other' : "Files starting with '$group_name'" ?>
+                        <?php elseif (strpos($sort, 'type_') === 0 && $sort !== 'type_all'): ?>
+                            <?php 
+                            $type_label = '';
+                            switch ($sort) {
+                                case 'type_image': $type_label = 'Images'; break;
+                                case 'type_video': $type_label = 'Videos'; break;
+                                case 'type_jpg': $type_label = 'JPEG Images'; break;
+                                case 'type_png': $type_label = 'PNG Images'; break;
+                                case 'type_mp4': $type_label = 'MP4 Videos'; break;
+                                case 'type_webm': $type_label = 'WebM Videos'; break;
+                            }
+                            echo $type_label . ' - ' . date('l, F j, Y', strtotime($group_name));
+                            ?>
                         <?php else: ?>
                             <?= date('l, F j, Y', strtotime($group_name)) ?>
                         <?php endif; ?>
@@ -822,6 +939,10 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
     <!-- Lightbox container -->
     <div class="lightbox" id="lightbox">
         <span class="close-lightbox">&times;</span>
+        <div class="lightbox-nav">
+            <button class="lightbox-prev">&lsaquo;</button>
+            <button class="lightbox-next">&rsaquo;</button>
+        </div>
         <div class="lightbox-content" id="lightbox-content"></div>
     </div>
 
@@ -857,9 +978,120 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             const lightbox = document.getElementById('lightbox');
             const lightboxContent = document.getElementById('lightbox-content');
             const closeButton = document.querySelector('.close-lightbox');
+            const prevButton = document.querySelector('.lightbox-prev');
+            const nextButton = document.querySelector('.lightbox-next');
             const items = document.querySelectorAll('.item');
             
-            // Handle group navigation
+            let currentIndex = 0;
+            
+            // Function to show media at specific index
+            function showMedia(index) {
+                // Make sure index is within bounds
+                if (index < 0) index = allMediaFiles.length - 1;
+                if (index >= allMediaFiles.length) index = 0;
+                
+                // Update current index
+                currentIndex = index;
+                
+                // Clear previous content
+                lightboxContent.innerHTML = '';
+                
+                // Get the file to display
+                const file = allMediaFiles[index];
+                
+                if (file.type && file.type.toString().includes('video')) {
+                    // Create video element for lightbox
+                    const video = document.createElement('video');
+                    video.controls = true;
+                    video.autoplay = true;
+                    
+                    const source = document.createElement('source');
+                    source.src = file.path;
+                    source.type = file.type;
+                    
+                    video.appendChild(source);
+                    lightboxContent.appendChild(video);
+                } else {
+                    // Create image element for lightbox
+                    const img = document.createElement('img');
+                    img.src = file.path;
+                    img.alt = file.path.split('/').pop();
+                    lightboxContent.appendChild(img);
+                }
+            }
+            
+            // Open lightbox when clicking an item
+            items.forEach(item => {
+                item.addEventListener('click', function() {
+                    currentIndex = parseInt(this.getAttribute('data-index'));
+                    showMedia(currentIndex);
+                    lightbox.classList.add('active');
+                });
+            });
+            
+            // Navigate to previous media
+            prevButton.addEventListener('click', function() {
+                showMedia(currentIndex - 1);
+            });
+            
+            // Navigate to next media
+            nextButton.addEventListener('click', function() {
+                showMedia(currentIndex + 1);
+            });
+            
+            // Close lightbox when clicking the close button
+            closeButton.addEventListener('click', function() {
+                lightbox.classList.remove('active');
+                
+                // Pause any videos when closing lightbox
+                const video = lightboxContent.querySelector('video');
+                if (video) {
+                    video.pause();
+                }
+            });
+            
+            // Close lightbox when clicking outside the content
+            lightbox.addEventListener('click', function(e) {
+                if (e.target === lightbox) {
+                    lightbox.classList.remove('active');
+                    
+                    // Pause any videos when closing lightbox
+                    const video = lightboxContent.querySelector('video');
+                    if (video) {
+                        video.pause();
+                    }
+                }
+            });
+            
+            // Handle keyboard navigation
+            document.addEventListener('keydown', function(e) {
+                if (lightbox.classList.contains('active')) {
+                    switch (e.key) {
+                        case 'Escape':
+                            // Close lightbox
+                            lightbox.classList.remove('active');
+                            
+                            // Pause any videos when closing lightbox
+                            const video = lightboxContent.querySelector('video');
+                            if (video) {
+                                video.pause();
+                            }
+                            break;
+                            
+                        case 'ArrowLeft':
+                            // Previous media
+                            showMedia(currentIndex - 1);
+                            break;
+                            
+                        case 'ArrowRight':
+                            // Next media
+                            showMedia(currentIndex + 1);
+                            break;
+                    }
+                }
+            });
+            
+            // Handle group navigation (remaining code as before)
             const groupNavItems = document.querySelectorAll('.group-nav-item');
             groupNavItems.forEach(item => {
                 item.addEventListener('click', function() {
@@ -905,75 +1137,6 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                     });
                 });
             }
-            
-            // Open lightbox when clicking an item
-            items.forEach(item => {
-                item.addEventListener('click', function() {
-                    const index = parseInt(this.getAttribute('data-index'));
-                    const file = allMediaFiles[index];
-                    
-                    lightboxContent.innerHTML = '';
-                    
-                    if (file.type && file.type.toString().includes('video')) {
-                        // Create video element for lightbox
-                        const video = document.createElement('video');
-                        video.controls = true;
-                        video.autoplay = true;
-                        
-                        const source = document.createElement('source');
-                        source.src = file.path;
-                        source.type = file.type;
-                        
-                        video.appendChild(source);
-                        lightboxContent.appendChild(video);
-                    } else {
-                        // Create image element for lightbox
-                        const img = document.createElement('img');
-                        img.src = file.path;
-                        img.alt = file.path.split('/').pop();
-                        lightboxContent.appendChild(img);
-                    }
-                    
-                    lightbox.classList.add('active');
-                });
-            });
-            
-            // Close lightbox when clicking the close button
-            closeButton.addEventListener('click', function() {
-                lightbox.classList.remove('active');
-                
-                // Pause any videos when closing lightbox
-                const video = lightboxContent.querySelector('video');
-                if (video) {
-                    video.pause();
-                }
-            });
-            
-            // Close lightbox when clicking outside the content
-            lightbox.addEventListener('click', function(e) {
-                if (e.target === lightbox) {
-                    lightbox.classList.remove('active');
-                    
-                    // Pause any videos when closing lightbox
-                    const video = lightboxContent.querySelector('video');
-                    if (video) {
-                        video.pause();
-                    }
-                }
-            });
-            
-            // Handle keyboard navigation (Esc to close)
-            document.addEventListener('keydown', function(e) {
-                if (e.key === 'Escape' && lightbox.classList.contains('active')) {
-                    lightbox.classList.remove('active');
-                    
-                    // Pause any videos when closing lightbox
-                    const video = lightboxContent.querySelector('video');
-                    if (video) {
-                        video.pause();
-                    }
-                }
-            });
         });
     </script>
 </body>
