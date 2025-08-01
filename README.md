@@ -14,3 +14,8 @@ It's still a work in progress, and I'll add more documentation once I have produ
 5. (Optional) Add `'Google' => 'https://google.com',` for each external link you want to add to the page.
 
 Done!
+
+# Requirements:
+* [PHP 5.2=>](https://www.php.net/)
+* [ffmpeg](https://ffmpeg.org/) (in path)
+* [ffprobe](https://ffmpeg.org/ffprobe.html) (in path)
