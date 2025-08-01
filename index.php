@@ -268,6 +268,7 @@ if ($filter_type && $filter_type !== 'type_all') {
             $media_files = array_filter($media_files, function($file) {
                 return strpos($file['path'], '.gif') !== false;
             });
+            break;
         case 'type_jpg':
             $media_files = array_filter($media_files, function($file) {
                 return strpos($file['path'], '.jpg') !== false || 
@@ -1184,13 +1185,13 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                         <?php foreach ($files as $file): ?>
                         <div class="item" data-index="<?= $global_index++ ?>">
                             <?php if (strpos($file['type'], 'video/') === 0): ?>
-                                <video poster="<?= $thumbs_dir . '/' . basename($file['path']) ?>">
-                                    <source src="<?= $file['path'] ?>" type="<?= $file['type'] ?>">
+                                <video poster="<?= $thumbs_dir . '/' . rawurlencode(basename($file['path'])) ?>">
+                                    <source src="<?= str_replace('\\', '/', dirname($file['path'])) . '/' . rawurlencode(basename($file['path'])) ?>" type="<?= $file['type'] ?>">
                                 </video>
                                 <div class="play-button">▶</div>
                             <?php else: ?>
-                                <img src="<?= $thumbs_dir . '/' . basename($file['path']) ?>" 
-                                    alt="<?= basename($file['path']) ?>"
+                                <img src="<?= $thumbs_dir . '/' . rawurlencode(basename($file['path'])) ?>" 
+                                    alt="<?= htmlspecialchars(basename($file['path'])) ?>"
                                     loading="lazy">
                             <?php endif; ?>
                             <div class="info">
@@ -1312,7 +1313,12 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                     video.autoplay = true;
                     
                     const source = document.createElement('source');
-                    source.src = file.path;
+                    // Normalize path separators and construct proper URL
+                    const normalizedPath = file.path.replace(/\\/g, '/');
+                    const pathParts = normalizedPath.split('/');
+                    const encodedFilename = encodeURIComponent(pathParts.pop());
+                    const pathDir = pathParts.join('/');
+                    source.src = pathDir + '/' + encodedFilename;
                     source.type = file.type;
                     
                     video.appendChild(source);
@@ -1320,8 +1326,13 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 } else {
                     // Create image element for lightbox
                     const img = document.createElement('img');
-                    img.src = file.path;
-                    img.alt = file.path.split('/').pop();
+                    // Normalize path separators and construct proper URL
+                    const normalizedPath = file.path.replace(/\\/g, '/');
+                    const pathParts = normalizedPath.split('/');
+                    const encodedFilename = encodeURIComponent(pathParts.pop());
+                    const pathDir = pathParts.join('/');
+                    img.src = pathDir + '/' + encodedFilename;
+                    img.alt = normalizedPath.split('/').pop();
                     lightboxContent.appendChild(img);
                 }
             }
