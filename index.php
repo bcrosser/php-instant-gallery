@@ -2,7 +2,7 @@
 // Configuration
 $base_dir = './pics';  // Base directory containing media files
 $thumbs_dir = './thumbs';  // Directory for generated thumbnails
-$thumb_width = 200;       // Thumbnail width in pixels
+$thumb_width = 200;       // default thumbnail size
 
 // Directory navigation links - add your custom links here
 $nav_links = [
@@ -221,8 +221,8 @@ if (strpos($sort, 'type_') === 0) {
 }
 
 // Get pagination parameters
-$items_per_page = isset($_GET['per_page']) ? (int)$_GET['per_page'] : 100;
-$items_per_page = max(25, min(100, $items_per_page)); // Enforce limits
+$items_per_page = isset($_GET['per_page']) ? (int)$_GET['per_page'] : 500;
+$items_per_page = max(25, min(500, $items_per_page)); // Enforce limits
 $current_page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
 
 // Sort the media files based on the selected criteria
@@ -673,32 +673,28 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
         
         .date-gallery {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(250px, 400px)); /* Default with max constraint */
             grid-gap: 15px;
             width: 100%;
+            justify-content: start; /* Align items to start instead of stretching */
         }
         
-        @media (min-width: 1200px) {
+        /* Media queries for responsive thumbnail grid */
+        @media (max-width: 1200px) {
             .date-gallery {
-                grid-template-columns: repeat(4, 1fr);
+                grid-template-columns: repeat(auto-fit, minmax(200px, 350px));
             }
         }
         
-        @media (max-width: 1199px) and (min-width: 900px) {
+        @media (max-width: 900px) {
             .date-gallery {
-                grid-template-columns: repeat(3, 1fr);
+                grid-template-columns: repeat(auto-fit, minmax(180px, 300px));
             }
         }
         
-        @media (max-width: 899px) and (min-width: 600px) {
+        @media (max-width: 600px) {
             .date-gallery {
-                grid-template-columns: repeat(2, 1fr);
-            }
-        }
-        
-        @media (max-width: 599px) {
-            .date-gallery {
-                grid-template-columns: 1fr;
+                grid-template-columns: repeat(auto-fit, minmax(150px, 250px));
             }
         }
         
@@ -714,6 +710,26 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 max-width: none;
                 position: relative;
             }
+            
+            /* Override thumbnail size control for mobile */
+            .thumbnail-size-control input[type="range"] {
+                display: none;
+            }
+            
+            .size-labels {
+                justify-content: center;
+            }
+            
+            /* Reset item sizes on mobile */
+            .item {
+                width: auto !important;
+                height: auto !important;
+                min-width: auto !important;
+                min-height: auto !important;
+                max-width: none !important;
+                max-height: none !important;
+                aspect-ratio: 1;
+            }
         }
         
         .item {
@@ -725,7 +741,12 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             background: white;
             cursor: pointer;
             transition: transform 0.2s ease;
+            /* Use aspect-ratio to maintain square proportions */
             aspect-ratio: 1;
+            min-width: 250px; /* Default minimum size, will be overridden by JavaScript */
+            min-height: 250px;
+            max-width: 400px; /* Default maximum size to prevent excessive stretching */
+            max-height: 400px;
         }
         
         .item:hover {
@@ -1000,6 +1021,66 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             border-radius: 4px;
             border: 1px solid #ddd;
         }
+        
+        /* Thumbnail size control styles */
+        .thumbnail-size-control {
+            margin-top: 5px;
+        }
+        
+        .thumbnail-size-control input[type="range"] {
+            width: 100%;
+            height: 6px;
+            background: #34495e;
+            outline: none;
+            border-radius: 3px;
+            -webkit-appearance: none;
+            appearance: none;
+        }
+        
+        .thumbnail-size-control input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            background: #3498db;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .thumbnail-size-control input[type="range"]::-webkit-slider-thumb:hover {
+            background: #2980b9;
+        }
+        
+        .thumbnail-size-control input[type="range"]::-moz-range-thumb {
+            width: 16px;
+            height: 16px;
+            background: #3498db;
+            border-radius: 50%;
+            cursor: pointer;
+            border: none;
+            transition: background 0.2s;
+        }
+        
+        .thumbnail-size-control input[type="range"]::-moz-range-thumb:hover {
+            background: #2980b9;
+        }
+        
+        .size-labels {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 5px;
+            font-size: 0.8em;
+            opacity: 0.8;
+        }
+        
+        #sizeValue {
+            background: rgba(255,255,255,0.1);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -1071,6 +1152,19 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                     </optgroup>
                 </select>
             </div>
+            
+            <div class="group">
+                <span class="group-label">Thumbnail Size</span>
+                <div class="thumbnail-size-control">
+                    <input type="range" id="thumbnailSize" min="50" max="500" value="<?= $thumb_width ?>" 
+                           oninput="updateThumbnailSize(this.value)" onchange="updateThumbnailSize(this.value)">
+                    <div class="size-labels">
+                        <span>Small</span>
+                        <span id="sizeValue"><?= $thumb_width ?>px</span>
+                        <span>Large</span>
+                    </div>
+                </div>
+            </div>
         </div>
         
         <?php if (!empty($grouped_files)): ?>
@@ -1140,6 +1234,13 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                         <option value="50" <?= $items_per_page == 50 ? 'selected' : '' ?>>50</option>
                         <option value="75" <?= $items_per_page == 75 ? 'selected' : '' ?>>75</option>
                         <option value="100" <?= $items_per_page == 100 ? 'selected' : '' ?>>100</option>
+                        <option value="150" <?= $items_per_page == 150 ? 'selected' : '' ?>>150</option>
+                        <option value="200" <?= $items_per_page == 200 ? 'selected' : '' ?>>200</option>
+                        <option value="250" <?= $items_per_page == 250 ? 'selected' : '' ?>>250</option>
+                        <option value="300" <?= $items_per_page == 300 ? 'selected' : '' ?>>300</option>
+                        <option value="350" <?= $items_per_page == 350 ? 'selected' : '' ?>>350</option>
+                        <option value="400" <?= $items_per_page == 400 ? 'selected' : '' ?>>400</option>
+                        <option value="500" <?= $items_per_page == 500 ? 'selected' : '' ?>>500</option>
                     </select>
                 </div>
                 
@@ -1537,6 +1638,86 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             if (e.target.classList.contains('page-option')) {
                 e.stopPropagation();
             }
+        });
+        
+        // Thumbnail size control functionality
+        function updateThumbnailSize(size) {
+            const sizeValue = document.getElementById('sizeValue');
+            if (sizeValue) {
+                sizeValue.textContent = size + 'px';
+            }
+            
+            // Get current window width to determine responsive behavior
+            const windowWidth = window.innerWidth;
+            
+            // Don't apply dynamic sizing on mobile devices
+            if (windowWidth <= 700) {
+                localStorage.setItem('thumbnailSize', size);
+                return;
+            }
+            
+            // Calculate max size to prevent single thumbnails from stretching too much
+            const maxSize = Math.min(parseInt(size) * 1.5, 400); // Cap at 1.5x the slider value or 400px
+            
+            // Update all gallery grids to use auto-fit with size constraints
+            const galleries = document.querySelectorAll('.date-gallery');
+            galleries.forEach(gallery => {
+                // Use auto-fit but limit maximum size to prevent single items from stretching too much
+                gallery.style.gridTemplateColumns = `repeat(auto-fit, minmax(${size}px, ${maxSize}px))`;
+                gallery.style.justifyContent = 'start'; // Align items to start instead of stretching
+            });
+            
+            // Update all thumbnail items to use the new size constraints
+            const items = document.querySelectorAll('.item');
+            items.forEach(item => {
+                item.style.minWidth = size + 'px';
+                item.style.minHeight = size + 'px';
+                item.style.maxWidth = maxSize + 'px';
+                item.style.maxHeight = maxSize + 'px';
+                item.style.width = 'auto';
+                item.style.height = 'auto';
+                item.style.aspectRatio = '1';
+            });
+            
+            // Store the preference in localStorage
+            localStorage.setItem('thumbnailSize', size);
+        }
+        
+        // Handle window resize to recalculate columns
+        function handleResize() {
+            const slider = document.getElementById('thumbnailSize');
+            if (slider) {
+                updateThumbnailSize(slider.value);
+            }
+        }
+        
+        // Load saved thumbnail size on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            const savedSize = localStorage.getItem('thumbnailSize');
+            const slider = document.getElementById('thumbnailSize');
+            
+            if (savedSize && slider) {
+                slider.value = savedSize;
+                // Apply the saved size immediately
+                updateThumbnailSize(savedSize);
+            } else if (slider) {
+                // Apply the default size from the slider
+                updateThumbnailSize(slider.value);
+            }
+            
+            // Add window resize listener
+            let resizeTimeout;
+            window.addEventListener('resize', function() {
+                clearTimeout(resizeTimeout);
+                resizeTimeout = setTimeout(handleResize, 250); // Debounce resize events
+            });
+            
+            // Also trigger resize after a short delay to ensure all elements are loaded
+            setTimeout(function() {
+                if (slider) {
+                    updateThumbnailSize(slider.value);
+                }
+            }, 100);
         });
     </script>
 </body>
