@@ -200,6 +200,11 @@ $media_files = get_media_files($current_dir);
 // Get sort parameter from URL
 $sort = isset($_GET['sort']) ? $_GET['sort'] : 'modified_desc';
 
+// Get pagination parameters
+$items_per_page = isset($_GET['per_page']) ? (int)$_GET['per_page'] : 100;
+$items_per_page = max(25, min(100, $items_per_page)); // Enforce limits
+$current_page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
+
 // Sort the media files based on the selected criteria
 usort($media_files, function($a, $b) use ($sort) {
     switch($sort) {
@@ -357,8 +362,84 @@ $grouped_files = array_filter($grouped_files, function($group) {
     return count($group) > 0;
 });
 
+// Calculate pagination for all files
+$all_files = [];
+foreach ($grouped_files as $group) {
+    $all_files = array_merge($all_files, $group);
+}
+$total_files = count($all_files);
+$total_pages = ceil($total_files / $items_per_page);
+$current_page = min($current_page, max(1, $total_pages)); // Ensure valid page
+
+// Paginate the files
+$start_index = ($current_page - 1) * $items_per_page;
+$paginated_files = array_slice($all_files, $start_index, $items_per_page);
+
+// Rebuild grouped files with paginated data
+$grouped_files = [];
+if ($sort == 'size_desc') {
+    // Define size ranges for paginated files
+    $size_ranges = [
+        'Less than 5MB' => function($size) { return $size < 5 * 1024 * 1024; },
+        '5MB to 25MB' => function($size) { return $size >= 5 * 1024 * 1024 && $size < 25 * 1024 * 1024; },
+        '25MB to 50MB' => function($size) { return $size >= 25 * 1024 * 1024 && $size < 50 * 1024 * 1024; },
+        '50MB to 250MB' => function($size) { return $size >= 50 * 1024 * 1024 && $size < 250 * 1024 * 1024; },
+        '250MB to 500MB' => function($size) { return $size >= 250 * 1024 * 1024 && $size < 500 * 1024 * 1024; },
+        '500MB to 1TB' => function($size) { return $size >= 500 * 1024 * 1024 && $size < 1024 * 1024 * 1024 * 1024; },
+    ];
+    
+    foreach ($paginated_files as $file) {
+        foreach ($size_ranges as $range_name => $condition) {
+            if ($condition($file['size'])) {
+                if (!isset($grouped_files[$range_name])) {
+                    $grouped_files[$range_name] = [];
+                }
+                $grouped_files[$range_name][] = $file;
+                break;
+            }
+        }
+    }
+} else if ($sort == 'name_asc' || $sort == 'name_desc') {
+    foreach ($paginated_files as $file) {
+        $first_letter = strtoupper(substr($file['name'], 0, 1));
+        if (!ctype_alpha($first_letter)) {
+            $first_letter = '#';
+        }
+        
+        if (!isset($grouped_files[$first_letter])) {
+            $grouped_files[$first_letter] = [];
+        }
+        
+        $grouped_files[$first_letter][] = $file;
+    }
+    ksort($grouped_files);
+} else {
+    // Group paginated files by date
+    $date_field = (strpos($sort, 'taken') === 0) ? 'taken' : 'modified';
+    if (strpos($sort, 'type_') === 0) {
+        $date_field = 'modified';
+    }
+    
+    foreach ($paginated_files as $file) {
+        $date = $file[$date_field];
+        $day = date('Y-m-d', $date);
+        
+        if (!isset($grouped_files[$day])) {
+            $grouped_files[$day] = [];
+        }
+        
+        $grouped_files[$day][] = $file;
+    }
+    
+    if ($sort == 'modified_asc' || $sort == 'taken_asc') {
+        ksort($grouped_files);
+    } else {
+        krsort($grouped_files);
+    }
+}
+
 // Generate thumbnails for each media file
-foreach ($media_files as $file) {
+foreach ($paginated_files as $file) {
     // Create thumbnail path
     $thumb_path = $thumbs_dir . '/' . basename($file['path']);
     
@@ -741,39 +822,110 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             font-size: 16px;
         }
 
-        .lightbox-nav {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
-            z-index: 1000;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 0 20px;
-        }
-
         .lightbox-prev, .lightbox-next {
-            background: rgba(0,0,0,0.5);
+            position: fixed;
+            top: 50%;
+            transform: translateY(-50%);
+            background: rgba(0,0,0,0.7);
             color: white;
             border: none;
-            width: 50px;
-            height: 50px;
+            width: 80px;
+            height: 80px;
             border-radius: 50%;
-            font-size: 30px;
+            font-size: 40px;
             display: flex;
             justify-content: center;
             align-items: center;
             cursor: pointer;
-            pointer-events: auto;
             transition: background 0.2s, transform 0.2s;
+            font-weight: bold;
+            z-index: 1002;
+        }
+
+        .lightbox-prev {
+            left: 40px;
+        }
+
+        .lightbox-next {
+            right: 40px;
         }
 
         .lightbox-prev:hover, .lightbox-next:hover {
-            background: rgba(0,0,0,0.8);
-            transform: scale(1.1);
+            background: rgba(0,0,0,0.9);
+            transform: translateY(-50%) scale(1.1);
+        }
+
+        @media (max-width: 768px) {
+            .lightbox-prev, .lightbox-next {
+                width: 60px;
+                height: 60px;
+                font-size: 30px;
+            }
+            
+            .lightbox-prev {
+                left: 20px;
+            }
+            
+            .lightbox-next {
+                right: 20px;
+            }
+        }
+
+        /* Pagination styles */
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 20px 0;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .pagination-info {
+            background: #3498db;
+            color: white;
+            padding: 8px 15px;
+            border-radius: 4px;
+            font-size: 0.9em;
+            margin: 0 10px;
+        }
+
+        .pagination a, .pagination .current {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            text-decoration: none;
+            color: #333;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+
+        .pagination a:hover {
+            background: #f5f5f5;
+        }
+
+        .pagination .current {
+            background: #3498db;
+            color: white;
+            border-color: #3498db;
+        }
+
+        .pagination .disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
+        .items-per-page {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 0 20px;
+        }
+
+        .items-per-page select {
+            padding: 6px 10px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
         }
     </style>
 </head>
@@ -812,23 +964,23 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
         <div class="controls">
             <div class="group">
                 <span class="group-label">By Last Modified Date</span>
-                <select id="sortByModified" onchange="location.href='?dir=<?= urlencode($current_dir) ?>&sort='+this.value">
-                    <option value="modified_desc" <?= $sort == 'modified_desc' ? 'selected' : '' ?>>File Date - Newest First</option>
-                    <option value="modified_asc" <?= $sort == 'modified_asc' ? 'selected' : '' ?>>File Date - Oldest First</option>
+                <select id="sortByModified" onchange="location.href='?dir=<?= urlencode($current_dir) ?>&sort='+this.value+'&per_page=<?= $items_per_page ?>&page=1'">
+                    <option value="modified_desc" <?= $sort == 'modified_desc' ? 'selected' : '' ?>>Last Modified - Newest First</option>
+                    <option value="modified_asc" <?= $sort == 'modified_asc' ? 'selected' : '' ?>>Last Modified - Oldest First</option>
                 </select>
             </div>
             
             <div class="group">
                 <span class="group-label">By Date Taken</span>
-                <select id="sortByTaken" onchange="location.href='?dir=<?= urlencode($current_dir) ?>&sort='+this.value">
-                    <option value="taken_desc" <?= $sort == 'taken_desc' ? 'selected' : '' ?>>Media Date - Newest First</option>
-                    <option value="taken_asc" <?= $sort == 'taken_asc' ? 'selected' : '' ?>>Media Date - Oldest First</option>
+                <select id="sortByTaken" onchange="location.href='?dir=<?= urlencode($current_dir) ?>&sort='+this.value+'&per_page=<?= $items_per_page ?>&page=1'">
+                    <option value="taken_desc" <?= $sort == 'taken_desc' ? 'selected' : '' ?>>Date Taken - Newest First</option>
+                    <option value="taken_asc" <?= $sort == 'taken_asc' ? 'selected' : '' ?>>Date Taken - Oldest First</option>
                 </select>
             </div>
             
             <div class="group">
                 <span class="group-label">Other Sorting</span>
-                <select id="sortByOther" onchange="location.href='?dir=<?= urlencode($current_dir) ?>&sort='+this.value">
+                <select id="sortByOther" onchange="location.href='?dir=<?= urlencode($current_dir) ?>&sort='+this.value+'&per_page=<?= $items_per_page ?>&page=1'">
                     <option value="size_desc" <?= $sort == 'size_desc' ? 'selected' : '' ?>>By Size</option>
                     <option value="name_asc" <?= $sort == 'name_asc' ? 'selected' : '' ?>>By Name (A-Z)</option>
                     <option value="name_desc" <?= $sort == 'name_desc' ? 'selected' : '' ?>>By Name (Z-A)</option>
@@ -881,6 +1033,41 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 <p>Upload some media files to the "<?= htmlspecialchars($current_dir) ?>" directory to get started.</p>
             </div>
         <?php else: ?>
+            <!-- Top pagination -->
+            <?php if ($total_pages > 1): ?>
+            <div class="pagination">
+                <?php if ($current_page > 1): ?>
+                    <a href="?dir=<?= urlencode($current_dir) ?>&sort=<?= $sort ?>&per_page=<?= $items_per_page ?>&page=1">&laquo; First</a>
+                    <a href="?dir=<?= urlencode($current_dir) ?>&sort=<?= $sort ?>&per_page=<?= $items_per_page ?>&page=<?= $current_page - 1 ?>">&lsaquo; Prev</a>
+                <?php else: ?>
+                    <span class="disabled">&laquo; First</span>
+                    <span class="disabled">&lsaquo; Prev</span>
+                <?php endif; ?>
+                
+                <div class="pagination-info">
+                    Page <?= $current_page ?> of <?= $total_pages ?> (<?= $total_files ?> items)
+                </div>
+                
+                <div class="items-per-page">
+                    <label>Items per page:</label>
+                    <select onchange="location.href='?dir=<?= urlencode($current_dir) ?>&sort=<?= $sort ?>&per_page='+this.value+'&page=1'">
+                        <option value="25" <?= $items_per_page == 25 ? 'selected' : '' ?>>25</option>
+                        <option value="50" <?= $items_per_page == 50 ? 'selected' : '' ?>>50</option>
+                        <option value="75" <?= $items_per_page == 75 ? 'selected' : '' ?>>75</option>
+                        <option value="100" <?= $items_per_page == 100 ? 'selected' : '' ?>>100</option>
+                    </select>
+                </div>
+                
+                <?php if ($current_page < $total_pages): ?>
+                    <a href="?dir=<?= urlencode($current_dir) ?>&sort=<?= $sort ?>&per_page=<?= $items_per_page ?>&page=<?= $current_page + 1 ?>">Next &rsaquo;</a>
+                    <a href="?dir=<?= urlencode($current_dir) ?>&sort=<?= $sort ?>&per_page=<?= $items_per_page ?>&page=<?= $total_pages ?>">Last &raquo;</a>
+                <?php else: ?>
+                    <span class="disabled">Next &rsaquo;</span>
+                    <span class="disabled">Last &raquo;</span>
+                <?php endif; ?>
+            </div>
+            <?php endif; ?>
+            
             <?php 
             $global_index = 0;
             foreach ($grouped_files as $group_name => $files): 
@@ -933,22 +1120,45 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                     </div>
                 </div>
             <?php endforeach; ?>
+            
+            <!-- Bottom pagination -->
+            <?php if ($total_pages > 1): ?>
+            <div class="pagination">
+                <?php if ($current_page > 1): ?>
+                    <a href="?dir=<?= urlencode($current_dir) ?>&sort=<?= $sort ?>&per_page=<?= $items_per_page ?>&page=1">&laquo; First</a>
+                    <a href="?dir=<?= urlencode($current_dir) ?>&sort=<?= $sort ?>&per_page=<?= $items_per_page ?>&page=<?= $current_page - 1 ?>">&lsaquo; Prev</a>
+                <?php else: ?>
+                    <span class="disabled">&laquo; First</span>
+                    <span class="disabled">&lsaquo; Prev</span>
+                <?php endif; ?>
+                
+                <div class="pagination-info">
+                    Page <?= $current_page ?> of <?= $total_pages ?> (<?= $total_files ?> items)
+                </div>
+                
+                <?php if ($current_page < $total_pages): ?>
+                    <a href="?dir=<?= urlencode($current_dir) ?>&sort=<?= $sort ?>&per_page=<?= $items_per_page ?>&page=<?= $current_page + 1 ?>">Next &rsaquo;</a>
+                    <a href="?dir=<?= urlencode($current_dir) ?>&sort=<?= $sort ?>&per_page=<?= $items_per_page ?>&page=<?= $total_pages ?>">Last &raquo;</a>
+                <?php else: ?>
+                    <span class="disabled">Next &rsaquo;</span>
+                    <span class="disabled">Last &raquo;</span>
+                <?php endif; ?>
+            </div>
+            <?php endif; ?>
         <?php endif; ?>
     </div>
     
     <!-- Lightbox container -->
     <div class="lightbox" id="lightbox">
         <span class="close-lightbox">&times;</span>
-        <div class="lightbox-nav">
-            <button class="lightbox-prev">&lsaquo;</button>
-            <button class="lightbox-next">&rsaquo;</button>
-        </div>
+        <button class="lightbox-prev">&lsaquo;</button>
+        <button class="lightbox-next">&rsaquo;</button>
         <div class="lightbox-content" id="lightbox-content"></div>
     </div>
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
-            // Create a fixed array of all media files for the lightbox
+            // Create a fixed array of paginated media files for the lightbox
             const allMediaFiles = [];
             <?php 
             $index = 0;
@@ -1061,6 +1271,51 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                         video.pause();
                     }
                 }
+            });
+            
+            // Touch/swipe support for mobile devices
+            let touchStartX = 0;
+            let touchStartY = 0;
+            let touchEndX = 0;
+            let touchEndY = 0;
+            
+            lightboxContent.addEventListener('touchstart', function(e) {
+                touchStartX = e.changedTouches[0].screenX;
+                touchStartY = e.changedTouches[0].screenY;
+            });
+            
+            lightboxContent.addEventListener('touchend', function(e) {
+                touchEndX = e.changedTouches[0].screenX;
+                touchEndY = e.changedTouches[0].screenY;
+                
+                const deltaX = touchEndX - touchStartX;
+                const deltaY = touchEndY - touchStartY;
+                
+                // Check if it's a horizontal swipe (more horizontal than vertical movement)
+                if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 50) {
+                    if (deltaX > 0) {
+                        // Swipe right - previous image
+                        showMedia(currentIndex - 1);
+                    } else {
+                        // Swipe left - next image
+                        showMedia(currentIndex + 1);
+                    }
+                    e.preventDefault(); // Prevent default touch behavior
+                } else if (Math.abs(deltaX) < 30 && Math.abs(deltaY) < 30) {
+                    // Small movement, treat as tap to close
+                    lightbox.classList.remove('active');
+                    
+                    // Pause any videos when closing lightbox
+                    const video = lightboxContent.querySelector('video');
+                    if (video) {
+                        video.pause();
+                    }
+                }
+            });
+            
+            // Prevent default touch behavior on lightbox content to enable swipe
+            lightboxContent.addEventListener('touchmove', function(e) {
+                e.preventDefault();
             });
             
             // Handle keyboard navigation
