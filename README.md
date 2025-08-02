@@ -10,11 +10,7 @@ It's still a work in progress, and I'll add more documentation once I have produ
 - Supports jpg,jpeg,png,gif,mp4,webm,avi file types
 - Visiting gallery autogenerates thumbnails for all images and videos in gallery directory
 - Resizeable thumbnail size reorders images
-- Sort media Ascending/Descending by: 
--- Modified Date
--- Date Taken
--- Size
--- Name
+- Sort media Ascending/Descending by: modified date, date taken, size, name
 - Filter Media by file type and grouping.
 - Lightbox viewer with button, arrow key and touch navigation.
 - Integrated video player
