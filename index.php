@@ -16,6 +16,152 @@ $external_links = [
     // Add more links as needed
 ];
 
+// Constants and configuration arrays
+class GalleryConfig {
+    // Supported file extensions
+    const SUPPORTED_EXTENSIONS = '/\.(jpg|jpeg|gif|png|mp4|webm)$/i';
+    const IMAGE_EXTENSIONS = '/\.(jpg|gif|jpeg|png)$/i';
+    const VIDEO_EXTENSIONS = '/\.(mp4|webm)$/i';
+    
+    // Size ranges for grouping files
+    public static function getSizeRanges() {
+        return [
+            'Less than 5MB' => function($size) { return $size < 5 * 1024 * 1024; },
+            '5MB to 25MB' => function($size) { return $size >= 5 * 1024 * 1024 && $size < 25 * 1024 * 1024; },
+            '25MB to 50MB' => function($size) { return $size >= 25 * 1024 * 1024 && $size < 50 * 1024 * 1024; },
+            '50MB to 250MB' => function($size) { return $size >= 50 * 1024 * 1024 && $size < 250 * 1024 * 1024; },
+            '250MB to 500MB' => function($size) { return $size >= 250 * 1024 * 1024 && $size < 500 * 1024 * 1024; },
+            '500MB to 1TB' => function($size) { return $size >= 500 * 1024 * 1024 && $size < 1024 * 1024 * 1024 * 1024; },
+        ];
+    }
+    
+    // File type filters
+    public static function getFileTypeFilters() {
+        return [
+            'type_image' => function($file) {
+                return strpos($file['path'], '.jpg') !== false || 
+                       strpos($file['path'], '.jpeg') !== false || 
+                       strpos($file['path'], '.png') !== false || 
+                       strpos($file['path'], '.gif') !== false;
+            },
+            'type_video' => function($file) {
+                return strpos($file['path'], '.mp4') !== false || 
+                       strpos($file['path'], '.webm') !== false;
+            },
+            'type_gif' => function($file) {
+                return strpos($file['path'], '.gif') !== false;
+            },
+            'type_jpg' => function($file) {
+                return strpos($file['path'], '.jpg') !== false || 
+                       strpos($file['path'], '.jpeg') !== false;
+            },
+            'type_png' => function($file) {
+                return strpos($file['path'], '.png') !== false;
+            },
+            'type_mp4' => function($file) {
+                return strpos($file['path'], '.mp4') !== false;
+            },
+            'type_webm' => function($file) {
+                return strpos($file['path'], '.webm') !== false;
+            }
+        ];
+    }
+}
+
+// Utility functions for file grouping and sorting
+class GalleryUtils {
+    
+    public static function groupFilesBySize($files, $sort_direction = 'desc') {
+        $grouped_files = [];
+        $size_ranges = GalleryConfig::getSizeRanges();
+        
+        foreach ($files as $file) {
+            foreach ($size_ranges as $range_name => $condition) {
+                if ($condition($file['size'])) {
+                    if (!isset($grouped_files[$range_name])) {
+                        $grouped_files[$range_name] = [];
+                    }
+                    $grouped_files[$range_name][] = $file;
+                    break;
+                }
+            }
+        }
+        
+        // Sort groups based on direction
+        if ($sort_direction == 'asc') {
+            krsort($grouped_files); // For smallest first, reverse the group order
+        } else {
+            ksort($grouped_files); // For largest first, keep natural order
+        }
+        
+        return $grouped_files;
+    }
+    
+    public static function groupFilesByName($files, $sort_direction = 'asc') {
+        $grouped_files = [];
+        
+        foreach ($files as $file) {
+            $first_letter = strtoupper(substr($file['name'], 0, 1));
+            if (!ctype_alpha($first_letter)) {
+                $first_letter = '#'; // Group non-alphabetic starts together
+            }
+            
+            if (!isset($grouped_files[$first_letter])) {
+                $grouped_files[$first_letter] = [];
+            }
+            
+            $grouped_files[$first_letter][] = $file;
+        }
+        
+        // Sort groups alphabetically
+        if ($sort_direction == 'asc') {
+            ksort($grouped_files);
+        } else {
+            krsort($grouped_files);
+        }
+        
+        return $grouped_files;
+    }
+    
+    public static function groupFilesByDate($files, $date_field, $sort_direction = 'desc') {
+        $grouped_files = [];
+        
+        foreach ($files as $file) {
+            $date = $file[$date_field];
+            $day = date('Y-m-d', $date);
+            
+            if (!isset($grouped_files[$day])) {
+                $grouped_files[$day] = [];
+            }
+            
+            $grouped_files[$day][] = $file;
+        }
+        
+        // Sort groups by date
+        if ($sort_direction == 'asc') {
+            ksort($grouped_files);
+        } else {
+            krsort($grouped_files);
+        }
+        
+        return $grouped_files;
+    }
+    
+    public static function filterFilesByType($files, $filter_type) {
+        if (!$filter_type || $filter_type === 'type_all') {
+            return $files;
+        }
+        
+        $filters = GalleryConfig::getFileTypeFilters();
+        
+        if (isset($filters[$filter_type])) {
+            return array_filter($files, $filters[$filter_type]);
+        }
+        
+        return $files;
+    }
+}
+
 // Get the current directory from URL or use default
 $current_dir = isset($_GET['dir']) ? $_GET['dir'] : $base_dir;
 // Validate directory for security
@@ -121,12 +267,12 @@ function get_media_files($dir) {
         $filename = $file_info->getFilename();
         
         // Check for supported media types
-        if (preg_match('/\.(jpg|jpeg|gif|png|mp4|webm)$/i', $filename)) {
+        if (preg_match(GalleryConfig::SUPPORTED_EXTENSIONS, $filename)) {
             $type = null;
             $taken = 0;
             
             // Handle different file types
-            if (preg_match('/\.(jpg|gif|jpeg|png)$/i', $filename)) {
+            if (preg_match(GalleryConfig::IMAGE_EXTENSIONS, $filename)) {
                 try {
                     $type = exif_imagetype($path);
                     
@@ -140,7 +286,7 @@ function get_media_files($dir) {
                 } catch (Exception $e) {
                     // Silently handle EXIF errors
                 }
-            } else if (preg_match('/\.(mp4|webm)$/i', $filename)) {
+            } else if (preg_match(GalleryConfig::VIDEO_EXTENSIONS, $filename)) {
                 // Set video type manually
                 $type = preg_match('/\.mp4$/i', $filename) ? 'video/mp4' : 'video/webm';
                 
@@ -250,50 +396,7 @@ usort($media_files, function($a, $b) use ($actual_sort) {
 });
 
 // Filter the media files by type if a type filter is selected
-if ($filter_type && $filter_type !== 'type_all') {
-    switch ($filter_type) {
-        case 'type_image':
-            $media_files = array_filter($media_files, function($file) {
-                return strpos($file['path'], '.jpg') !== false || 
-                       strpos($file['path'], '.jpeg') !== false || 
-                       strpos($file['path'], '.png') !== false || 
-                       strpos($file['path'], '.gif') !== false;
-            });
-            break;
-        case 'type_video':
-            $media_files = array_filter($media_files, function($file) {
-                return strpos($file['path'], '.mp4') !== false || 
-                       strpos($file['path'], '.webm') !== false;
-            });
-            break;
-        case 'type_gif':
-            $media_files = array_filter($media_files, function($file) {
-                return strpos($file['path'], '.gif') !== false;
-            });
-            break;
-        case 'type_jpg':
-            $media_files = array_filter($media_files, function($file) {
-                return strpos($file['path'], '.jpg') !== false || 
-                       strpos($file['path'], '.jpeg') !== false;
-            });
-            break;
-        case 'type_png':
-            $media_files = array_filter($media_files, function($file) {
-                return strpos($file['path'], '.png') !== false;
-            });
-            break;
-        case 'type_mp4':
-            $media_files = array_filter($media_files, function($file) {
-                return strpos($file['path'], '.mp4') !== false;
-            });
-            break;
-        case 'type_webm':
-            $media_files = array_filter($media_files, function($file) {
-                return strpos($file['path'], '.webm') !== false;
-            });
-            break;
-    }
-}
+$media_files = GalleryUtils::filterFilesByType($media_files, $filter_type);
 
 // After sorting media files, group them by date, size or name
 $grouped_files = [];
@@ -301,97 +404,22 @@ $grouped_files = [];
 // Special handling for type filters
 if ($filter_type && $filter_type !== 'type_all') {
     // For type filters, we'll group by date based on the actual sort
-    foreach ($media_files as $file) {
-        $date_field = (strpos($actual_sort, 'taken') === 0) ? 'taken' : 'modified';
-        $date = $file[$date_field];
-        $day = date('Y-m-d', $date);
-        
-        if (!isset($grouped_files[$day])) {
-            $grouped_files[$day] = [];
-        }
-        
-        $grouped_files[$day][] = $file;
-    }
-    
-    // Sort the groups by date based on sort direction
-    if ($actual_sort == 'modified_asc' || $actual_sort == 'taken_asc') {
-        ksort($grouped_files);
-    } else {
-        krsort($grouped_files);
-    }
+    $date_field = (strpos($actual_sort, 'taken') === 0) ? 'taken' : 'modified';
+    $sort_direction = (strpos($actual_sort, '_asc') !== false) ? 'asc' : 'desc';
+    $grouped_files = GalleryUtils::groupFilesByDate($media_files, $date_field, $sort_direction);
 } else if ($actual_sort == 'size_desc' || $actual_sort == 'size_asc') {
-    // Define size ranges
-    $size_ranges = [
-        'Less than 5MB' => function($size) { return $size < 5 * 1024 * 1024; },
-        '5MB to 25MB' => function($size) { return $size >= 5 * 1024 * 1024 && $size < 25 * 1024 * 1024; },
-        '25MB to 50MB' => function($size) { return $size >= 25 * 1024 * 1024 && $size < 50 * 1024 * 1024; },
-        '50MB to 250MB' => function($size) { return $size >= 50 * 1024 * 1024 && $size < 250 * 1024 * 1024; },
-        '250MB to 500MB' => function($size) { return $size >= 250 * 1024 * 1024 && $size < 500 * 1024 * 1024; },
-        '500MB to 1TB' => function($size) { return $size >= 500 * 1024 * 1024 && $size < 1024 * 1024 * 1024 * 1024; },
-    ];
-    
     // Group files by size range
-    foreach ($media_files as $file) {
-        foreach ($size_ranges as $range_name => $condition) {
-            if ($condition($file['size'])) {
-                if (!isset($grouped_files[$range_name])) {
-                    $grouped_files[$range_name] = [];
-                }
-                $grouped_files[$range_name][] = $file;
-                break;
-            }
-        }
-    }
-    // Sort the groups by size based on sort direction
-    if ($actual_sort == 'size_asc') {
-        // For smallest first, reverse the group order (smallest groups first)
-        krsort($grouped_files);
-    } else {
-        // For largest first, keep natural order (largest groups first)
-        ksort($grouped_files);
-    }
+    $sort_direction = ($actual_sort == 'size_asc') ? 'asc' : 'desc';
+    $grouped_files = GalleryUtils::groupFilesBySize($media_files, $sort_direction);
 } else if ($actual_sort == 'name_asc' || $actual_sort == 'name_desc') {
     // Group files by first letter of filename
-    foreach ($media_files as $file) {
-        $first_letter = strtoupper(substr($file['name'], 0, 1));
-        if (!ctype_alpha($first_letter)) {
-            $first_letter = '#'; // Group non-alphabetic starts together
-        }
-        
-        if (!isset($grouped_files[$first_letter])) {
-            $grouped_files[$first_letter] = [];
-        }
-        
-        $grouped_files[$first_letter][] = $file;
-    }
-    
-    // Sort the groups alphabetically in the correct order
-    if ($actual_sort == 'name_asc') {
-        ksort($grouped_files);
-    } else {
-        krsort($grouped_files);
-    }
+    $sort_direction = ($actual_sort == 'name_asc') ? 'asc' : 'desc';
+    $grouped_files = GalleryUtils::groupFilesByName($media_files, $sort_direction);
 } else {
     // Group files by date (either modified or taken date depending on sort)
     $date_field = (strpos($actual_sort, 'taken') === 0) ? 'taken' : 'modified';
-    
-    foreach ($media_files as $file) {
-        $date = $file[$date_field];
-        $day = date('Y-m-d', $date);
-        
-        if (!isset($grouped_files[$day])) {
-            $grouped_files[$day] = [];
-        }
-        
-        $grouped_files[$day][] = $file;
-    }
-    
-    // For date sorting, make sure groups are in correct order
-    if ($actual_sort == 'modified_asc' || $actual_sort == 'taken_asc') {
-        ksort($grouped_files);
-    } else {
-        krsort($grouped_files);
-    }
+    $sort_direction = (strpos($actual_sort, '_asc') !== false) ? 'asc' : 'desc';
+    $grouped_files = GalleryUtils::groupFilesByDate($media_files, $date_field, $sort_direction);
 }
 
 // Filter out empty groups
@@ -415,26 +443,8 @@ if ($actual_sort == 'name_asc' || $actual_sort == 'name_desc') {
     $paginated_files = array_slice($all_files, $start_index, $items_per_page);
     
     // Rebuild grouped files with paginated data, maintaining letter groups
-    $grouped_files = [];
-    foreach ($paginated_files as $file) {
-        $first_letter = strtoupper(substr($file['name'], 0, 1));
-        if (!ctype_alpha($first_letter)) {
-            $first_letter = '#'; // Group non-alphabetic starts together
-        }
-        
-        if (!isset($grouped_files[$first_letter])) {
-            $grouped_files[$first_letter] = [];
-        }
-        
-        $grouped_files[$first_letter][] = $file;
-    }
-    
-    // Sort the groups alphabetically in the correct order
-    if ($actual_sort == 'name_asc') {
-        ksort($grouped_files);
-    } else {
-        krsort($grouped_files);
-    }
+    $sort_direction = ($actual_sort == 'name_asc') ? 'asc' : 'desc';
+    $grouped_files = GalleryUtils::groupFilesByName($paginated_files, $sort_direction);
 } else {
     // For other sorting types, use standard file-based pagination
     $start_index = ($current_page - 1) * $items_per_page;
@@ -443,35 +453,8 @@ if ($actual_sort == 'name_asc' || $actual_sort == 'name_desc') {
     // Rebuild grouped files with paginated data
     $grouped_files = [];
     if ($actual_sort == 'size_desc' || $actual_sort == 'size_asc') {
-        // Define size ranges for paginated files
-        $size_ranges = [
-            'Less than 5MB' => function($size) { return $size < 5 * 1024 * 1024; },
-            '5MB to 25MB' => function($size) { return $size >= 5 * 1024 * 1024 && $size < 25 * 1024 * 1024; },
-            '25MB to 50MB' => function($size) { return $size >= 25 * 1024 * 1024 && $size < 50 * 1024 * 1024; },
-            '50MB to 250MB' => function($size) { return $size >= 50 * 1024 * 1024 && $size < 250 * 1024 * 1024; },
-            '250MB to 500MB' => function($size) { return $size >= 250 * 1024 * 1024 && $size < 500 * 1024 * 1024; },
-            '500MB to 1TB' => function($size) { return $size >= 500 * 1024 * 1024 && $size < 1024 * 1024 * 1024 * 1024; },
-        ];
-        
-        foreach ($paginated_files as $file) {
-            foreach ($size_ranges as $range_name => $condition) {
-                if ($condition($file['size'])) {
-                    if (!isset($grouped_files[$range_name])) {
-                        $grouped_files[$range_name] = [];
-                    }
-                    $grouped_files[$range_name][] = $file;
-                    break;
-                }
-            }
-        }
-        // Sort the groups by size based on sort direction
-        if ($actual_sort == 'size_asc') {
-            // For smallest first, reverse the group order (smallest groups first)
-            krsort($grouped_files);
-        } else {
-            // For largest first, keep natural order (largest groups first)  
-            ksort($grouped_files);
-        }
+        $sort_direction = ($actual_sort == 'size_asc') ? 'asc' : 'desc';
+        $grouped_files = GalleryUtils::groupFilesBySize($paginated_files, $sort_direction);
     } else {
         // Group paginated files by date
         $date_field = (strpos($actual_sort, 'taken') === 0) ? 'taken' : 'modified';
@@ -479,22 +462,8 @@ if ($actual_sort == 'name_asc' || $actual_sort == 'name_desc') {
             $date_field = 'modified';
         }
         
-        foreach ($paginated_files as $file) {
-            $date = $file[$date_field];
-            $day = date('Y-m-d', $date);
-            
-            if (!isset($grouped_files[$day])) {
-                $grouped_files[$day] = [];
-            }
-            
-            $grouped_files[$day][] = $file;
-        }
-        
-        if ($actual_sort == 'modified_asc' || $actual_sort == 'taken_asc') {
-            ksort($grouped_files);
-        } else {
-            krsort($grouped_files);
-        }
+        $sort_direction = (strpos($actual_sort, '_asc') !== false) ? 'asc' : 'desc';
+        $grouped_files = GalleryUtils::groupFilesByDate($paginated_files, $date_field, $sort_direction);
     }
 }
 
