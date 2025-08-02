@@ -6,6 +6,16 @@ The idea here is that all you need to do is point this at a directory and it wil
 
 It's still a work in progress, and I'll add more documentation once I have productionalized the thing.
 
+# Screenshots
+
+- Sort By Modified Date - ![Sort By Modified Date](https://github.com/bcrosser/php-instant-gallery/blob/master/screenshots/instant-gallery-1.png)
+
+- Sort By Size and Change Thumbnail Size On The Fly - ![Sort By Size and Change Thumbnail Size On The Fly](https://github.com/bcrosser/php-instant-gallery/blob/master/screenshots/instant-gallery-2.png)
+
+- Select Groups Of Files To Show - ![Select Groups Of Files To Show](https://github.com/bcrosser/php-instant-gallery/blob/master/screenshots/instant-gallery-3.png)
+
+- Sort By Name - ![Sort By Name](https://github.com/bcrosser/php-instant-gallery/blob/master/screenshots/instant-gallery-4.png)
+
 # How to use:
 1. Copy index.php to directory above where gallery of media is.
 2. Change $base_dir to media directory
