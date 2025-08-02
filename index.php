@@ -343,10 +343,12 @@ if ($filter_type && $filter_type !== 'type_all') {
         }
     }
     // Sort the groups by size based on sort direction
-    if ($actual_sort == 'size_asc' || $actual_sort == 'size_desc') {
-        ksort($grouped_files);
-    } else {
+    if ($actual_sort == 'size_asc') {
+        // For smallest first, reverse the group order (smallest groups first)
         krsort($grouped_files);
+    } else {
+        // For largest first, keep natural order (largest groups first)
+        ksort($grouped_files);
     }
 } else if ($actual_sort == 'name_asc' || $actual_sort == 'name_desc') {
     // Group files by first letter of filename
@@ -462,12 +464,14 @@ if ($actual_sort == 'name_asc' || $actual_sort == 'name_desc') {
                 }
             }
         }
-        // Sort the groups alphabetically in the correct order
-    if ($actual_sort == 'size_asc') {
-        ksort($grouped_files);
-    } else {
-        krsort($grouped_files);
-    }
+        // Sort the groups by size based on sort direction
+        if ($actual_sort == 'size_asc') {
+            // For smallest first, reverse the group order (smallest groups first)
+            krsort($grouped_files);
+        } else {
+            // For largest first, keep natural order (largest groups first)  
+            ksort($grouped_files);
+        }
     } else {
         // Group paginated files by date
         $date_field = (strpos($actual_sort, 'taken') === 0) ? 'taken' : 'modified';
@@ -1212,7 +1216,7 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             <?php foreach ($grouped_files as $group_name => $files): ?>
             <div class="group-nav-item active" data-group="<?= md5($group_name) ?>">
                 <div class="group-name">
-                    <?php if ($actual_sort == 'size_desc'): ?>
+                    <?php if ($actual_sort == 'size_desc' || $actual_sort == 'size_asc'): ?>
                         <?= $group_name ?>
                     <?php elseif ($actual_sort == 'name_asc' || $actual_sort == 'name_desc'): ?>
                         <?= $group_name ?>
@@ -1294,7 +1298,7 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             ?>
                 <div class="date-section" id="group-<?= md5($group_name) ?>">
                     <div class="date-header">
-                        <?php if ($actual_sort == 'size_desc'): ?>
+                        <?php if ($actual_sort == 'size_desc' || $actual_sort == 'size_asc'): ?>
                             <?= $group_name ?>
                         <?php elseif ($actual_sort == 'name_asc' || $actual_sort == 'name_desc'): ?>
                             <?= $group_name == '#' ? 'Other' : "Files starting with '$group_name'" ?>
