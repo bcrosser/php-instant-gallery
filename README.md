@@ -7,7 +7,7 @@ The idea here is that all you need to do is point this at a directory and it wil
 It's still a work in progress, and I'll add more documentation once I have productionalized the thing.
 
 ## Features
-- Supports jpg,jpeg,png,gif,mp4,webm,avi file types
+- Supports jpg,jpeg,png,gif,mp4,webm file types
 - Visiting gallery autogenerates thumbnails for all images and videos in gallery directory
 - Resizeable thumbnail size reorders images
 - Sort media Ascending/Descending by: modified date, date taken, size, name
