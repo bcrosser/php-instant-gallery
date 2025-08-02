@@ -240,6 +240,8 @@ usort($media_files, function($a, $b) use ($actual_sort) {
             return $a['taken'] - $b['taken'];
         case 'taken_desc':
             return $b['taken'] - $a['taken'];
+        case 'size_asc':
+            return $a['size'] - $b['size'];
         case 'size_desc':
             return $b['size'] - $a['size'];
         default:
@@ -317,7 +319,7 @@ if ($filter_type && $filter_type !== 'type_all') {
     } else {
         krsort($grouped_files);
     }
-} else if ($actual_sort == 'size_desc') {
+} else if ($actual_sort == 'size_desc' || $actual_sort == 'size_asc') {
     // Define size ranges
     $size_ranges = [
         'Less than 5MB' => function($size) { return $size < 5 * 1024 * 1024; },
@@ -340,6 +342,12 @@ if ($filter_type && $filter_type !== 'type_all') {
             }
         }
     }
+    // Sort the groups by size based on sort direction
+    if ($actual_sort == 'size_asc' || $actual_sort == 'size_desc') {
+        ksort($grouped_files);
+    } else {
+        krsort($grouped_files);
+    }
 } else if ($actual_sort == 'name_asc' || $actual_sort == 'name_desc') {
     // Group files by first letter of filename
     foreach ($media_files as $file) {
@@ -355,8 +363,12 @@ if ($filter_type && $filter_type !== 'type_all') {
         $grouped_files[$first_letter][] = $file;
     }
     
-    // Sort the groups alphabetically
-    ksort($grouped_files);
+    // Sort the groups alphabetically in the correct order
+    if ($actual_sort == 'name_asc') {
+        ksort($grouped_files);
+    } else {
+        krsort($grouped_files);
+    }
 } else {
     // Group files by date (either modified or taken date depending on sort)
     $date_field = (strpos($actual_sort, 'taken') === 0) ? 'taken' : 'modified';
@@ -394,39 +406,18 @@ $total_files = count($all_files);
 $total_pages = ceil($total_files / $items_per_page);
 $current_page = min($current_page, max(1, $total_pages)); // Ensure valid page
 
-// Paginate the files
-$start_index = ($current_page - 1) * $items_per_page;
-$paginated_files = array_slice($all_files, $start_index, $items_per_page);
-
-// Rebuild grouped files with paginated data
-$grouped_files = [];
-if ($actual_sort == 'size_desc') {
-    // Define size ranges for paginated files
-    $size_ranges = [
-        'Less than 5MB' => function($size) { return $size < 5 * 1024 * 1024; },
-        '5MB to 25MB' => function($size) { return $size >= 5 * 1024 * 1024 && $size < 25 * 1024 * 1024; },
-        '25MB to 50MB' => function($size) { return $size >= 25 * 1024 * 1024 && $size < 50 * 1024 * 1024; },
-        '50MB to 250MB' => function($size) { return $size >= 50 * 1024 * 1024 && $size < 250 * 1024 * 1024; },
-        '250MB to 500MB' => function($size) { return $size >= 250 * 1024 * 1024 && $size < 500 * 1024 * 1024; },
-        '500MB to 1TB' => function($size) { return $size >= 500 * 1024 * 1024 && $size < 1024 * 1024 * 1024 * 1024; },
-    ];
+// For name sorting, use standard pagination but rebuild groups afterwards
+if ($actual_sort == 'name_asc' || $actual_sort == 'name_desc') {
+    // Use standard file-based pagination first
+    $start_index = ($current_page - 1) * $items_per_page;
+    $paginated_files = array_slice($all_files, $start_index, $items_per_page);
     
-    foreach ($paginated_files as $file) {
-        foreach ($size_ranges as $range_name => $condition) {
-            if ($condition($file['size'])) {
-                if (!isset($grouped_files[$range_name])) {
-                    $grouped_files[$range_name] = [];
-                }
-                $grouped_files[$range_name][] = $file;
-                break;
-            }
-        }
-    }
-} else if ($actual_sort == 'name_asc' || $actual_sort == 'name_desc') {
+    // Rebuild grouped files with paginated data, maintaining letter groups
+    $grouped_files = [];
     foreach ($paginated_files as $file) {
         $first_letter = strtoupper(substr($file['name'], 0, 1));
         if (!ctype_alpha($first_letter)) {
-            $first_letter = '#';
+            $first_letter = '#'; // Group non-alphabetic starts together
         }
         
         if (!isset($grouped_files[$first_letter])) {
@@ -435,29 +426,71 @@ if ($actual_sort == 'size_desc') {
         
         $grouped_files[$first_letter][] = $file;
     }
-    ksort($grouped_files);
-} else {
-    // Group paginated files by date
-    $date_field = (strpos($actual_sort, 'taken') === 0) ? 'taken' : 'modified';
-    if (strpos($filter_type, 'type_') === 0) {
-        $date_field = 'modified';
-    }
     
-    foreach ($paginated_files as $file) {
-        $date = $file[$date_field];
-        $day = date('Y-m-d', $date);
-        
-        if (!isset($grouped_files[$day])) {
-            $grouped_files[$day] = [];
-        }
-        
-        $grouped_files[$day][] = $file;
-    }
-    
-    if ($actual_sort == 'modified_asc' || $actual_sort == 'taken_asc') {
+    // Sort the groups alphabetically in the correct order
+    if ($actual_sort == 'name_asc') {
         ksort($grouped_files);
     } else {
         krsort($grouped_files);
+    }
+} else {
+    // For other sorting types, use standard file-based pagination
+    $start_index = ($current_page - 1) * $items_per_page;
+    $paginated_files = array_slice($all_files, $start_index, $items_per_page);
+
+    // Rebuild grouped files with paginated data
+    $grouped_files = [];
+    if ($actual_sort == 'size_desc' || $actual_sort == 'size_asc') {
+        // Define size ranges for paginated files
+        $size_ranges = [
+            'Less than 5MB' => function($size) { return $size < 5 * 1024 * 1024; },
+            '5MB to 25MB' => function($size) { return $size >= 5 * 1024 * 1024 && $size < 25 * 1024 * 1024; },
+            '25MB to 50MB' => function($size) { return $size >= 25 * 1024 * 1024 && $size < 50 * 1024 * 1024; },
+            '50MB to 250MB' => function($size) { return $size >= 50 * 1024 * 1024 && $size < 250 * 1024 * 1024; },
+            '250MB to 500MB' => function($size) { return $size >= 250 * 1024 * 1024 && $size < 500 * 1024 * 1024; },
+            '500MB to 1TB' => function($size) { return $size >= 500 * 1024 * 1024 && $size < 1024 * 1024 * 1024 * 1024; },
+        ];
+        
+        foreach ($paginated_files as $file) {
+            foreach ($size_ranges as $range_name => $condition) {
+                if ($condition($file['size'])) {
+                    if (!isset($grouped_files[$range_name])) {
+                        $grouped_files[$range_name] = [];
+                    }
+                    $grouped_files[$range_name][] = $file;
+                    break;
+                }
+            }
+        }
+        // Sort the groups alphabetically in the correct order
+    if ($actual_sort == 'size_asc') {
+        ksort($grouped_files);
+    } else {
+        krsort($grouped_files);
+    }
+    } else {
+        // Group paginated files by date
+        $date_field = (strpos($actual_sort, 'taken') === 0) ? 'taken' : 'modified';
+        if (strpos($filter_type, 'type_') === 0) {
+            $date_field = 'modified';
+        }
+        
+        foreach ($paginated_files as $file) {
+            $date = $file[$date_field];
+            $day = date('Y-m-d', $date);
+            
+            if (!isset($grouped_files[$day])) {
+                $grouped_files[$day] = [];
+            }
+            
+            $grouped_files[$day][] = $file;
+        }
+        
+        if ($actual_sort == 'modified_asc' || $actual_sort == 'taken_asc') {
+            ksort($grouped_files);
+        } else {
+            krsort($grouped_files);
+        }
     }
 }
 
@@ -1118,7 +1151,7 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
         <div class="controls">
             <div class="group">
                 <span class="group-label">Sort By</span>
-                <select id="sortBy" onchange="location.href='?dir=<?= urlencode($current_dir) ?>&sort='+this.value+'&filter=<?= urlencode($filter_type) ?>&per_page=<?= $items_per_page ?>&page=1'">>
+                <select id="sortBy" onchange="location.href='?dir=<?= urlencode($current_dir) ?>&sort='+this.value+'&filter=<?= urlencode($filter_type) ?>&per_page=<?= $items_per_page ?>&page=1'">
                     <optgroup label="By Date Modified">
                         <option value="modified_desc" <?= $actual_sort == 'modified_desc' ? 'selected' : '' ?>>Modified - Newest First</option>
                         <option value="modified_asc" <?= $actual_sort == 'modified_asc' ? 'selected' : '' ?>>Modified - Oldest First</option>
@@ -1133,13 +1166,14 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                     </optgroup>
                     <optgroup label="By Size">
                         <option value="size_desc" <?= $actual_sort == 'size_desc' ? 'selected' : '' ?>>Size (Largest First)</option>
+                        <option value="size_asc" <?= $actual_sort == 'size_asc' ? 'selected' : '' ?>>Size (Smallest First)</option>
                     </optgroup>
                 </select>
             </div>
             
             <div class="group">
                 <span class="group-label">Filter By Type</span>
-                <select id="filterBy" onchange="location.href='?dir=<?= urlencode($current_dir) ?>&sort=<?= urlencode($actual_sort) ?>&filter='+this.value+'&per_page=<?= $items_per_page ?>&page=1'">>
+                <select id="filterBy" onchange="location.href='?dir=<?= urlencode($current_dir) ?>&sort=<?= urlencode($actual_sort) ?>&filter='+this.value+'&per_page=<?= $items_per_page ?>&page=1'">
                     <option value="type_all" <?= $filter_type == 'type_all' ? 'selected' : '' ?>>All Files</option>
                     <optgroup label="By File Format">
                         <option value="type_image" <?= $filter_type == 'type_image' ? 'selected' : '' ?>>Images Only (jpg, png, gif, etc.)</option>
@@ -1229,7 +1263,7 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 
                 <div class="items-per-page">
                     <label>Items per page:</label>
-                    <select onchange="location.href='?dir=<?= urlencode($current_dir) ?>&sort=<?= urlencode($actual_sort) ?>&filter=<?= urlencode($filter_type) ?>&per_page='+this.value+'&page=1'">>
+                    <select onchange="location.href='?dir=<?= urlencode($current_dir) ?>&sort=<?= urlencode($actual_sort) ?>&filter=<?= urlencode($filter_type) ?>&per_page='+this.value+'&page=1'">
                         <option value="25" <?= $items_per_page == 25 ? 'selected' : '' ?>>25</option>
                         <option value="50" <?= $items_per_page == 50 ? 'selected' : '' ?>>50</option>
                         <option value="75" <?= $items_per_page == 75 ? 'selected' : '' ?>>75</option>
@@ -1372,7 +1406,7 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             if (sortBy) {
                 // Handle sorting options
                 if (sortBy.startsWith('modified_') || sortBy.startsWith('taken_') || 
-                    sortBy.startsWith('name_') || sortBy === 'size_desc') {
+                    sortBy.startsWith('name_') || sortBy === 'size_') {
                     document.getElementById('sortBy').value = sortBy;
                 }
                 
