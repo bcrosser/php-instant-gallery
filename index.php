@@ -3,7 +3,7 @@
 $base_dir = './pics';  // Base directory containing media files
 $thumbs_dir = './thumbs';  // Directory for generated thumbnails
 $thumb_width = 200;       // default thumbnail size
-$show_gps_coords = true;        // Show GPS coordinates in image details
+$show_gps_coords = false;        // Show GPS coordinates in image details
 // Directory navigation links - add your custom links here
 $nav_links = [
     // Format: 'Display Name' => 'path/to/directory'
@@ -333,6 +333,7 @@ function get_gps_coordinates($exif) {
 
 // Fix issue in get_media_files function
 function get_media_files($dir) {
+    global $show_gps_coords; // Make global variable accessible inside function
     $files = array();
     
     // Check if directory exists and is not empty
@@ -393,7 +394,7 @@ function get_media_files($dir) {
                             if ($show_gps_coords && $gps_coords) {
                                 $exif['GPS Latitude'] = number_format($gps_coords['latitude'], 6) . '° ' . $gps_coords['lat_ref'];
                                 $exif['GPS Longitude'] = number_format($gps_coords['longitude'], 6) . '° ' . $gps_coords['lon_ref'];
-                                $exif['Google Maps Link'] = '<a href="https://maps.google.com/maps?q=' . $gps_coords['latitude'] . ',' . $gps_coords['longitude'] .'" >View on Maps</a>';
+                                $exif['Google Maps Link'] = '<a href="https://maps.google.com/maps?q=' . $gps_coords['latitude'] . ',' . $gps_coords['longitude'] .'" target="_blank">View on Maps</a>';
                             }
                             
                             // Software/processing
@@ -407,8 +408,14 @@ function get_media_files($dir) {
                     $exif = null;
                 }
             } else if (preg_match(GalleryConfig::VIDEO_EXTENSIONS, $filename)) {
-                // Set video type manually
-                $type = preg_match('/\.mp4$/i', $filename) ? 'video/mp4' : 'video/webm';
+                // Set video type with more specific MIME types for better browser compatibility
+                if (preg_match('/\.mp4$/i', $filename)) {
+                    $type = 'video/mp4';
+                } else if (preg_match('/\.webm$/i', $filename)) {
+                    $type = 'video/webm';
+                } else {
+                    $type = 'video/mp4'; // Default fallback
+                }
                 
                 // Extract creation date from video metadata
                 $taken = get_video_creation_date($path);
@@ -590,23 +597,30 @@ if ($actual_sort == 'name_asc' || $actual_sort == 'name_desc') {
 
 // Generate thumbnails for each media file
 foreach ($paginated_files as $file) {
-    // Create thumbnail path
-    $thumb_path = $thumbs_dir . '/' . basename($file['path']);
+    // Create thumbnail path - videos need .jpg extension
+    $is_video = preg_match(GalleryConfig::VIDEO_EXTENSIONS, $file['path']);
+    
+    if ($is_video) {
+        $thumb_path = $thumbs_dir . '/' . basename($file['path']) . '.jpg';
+    } else {
+        $thumb_path = $thumbs_dir . '/' . basename($file['path']);
+    }
     
     // Skip if thumbnail already exists
     if (file_exists($thumb_path)) continue;
     
     // Handle different file types
-    switch ($file['type']) {
-        case IMAGETYPE_JPEG:
-        case IMAGETYPE_PNG:
-        case IMAGETYPE_GIF:
-            create_thumbnail($file['path'], $thumb_path, $thumb_width);
-            break;
-        case 'video/mp4':
-        case 'video/webm':
-            create_video_thumbnail($file['path'], $thumb_path);
-            break;
+    if ($is_video) {
+        create_video_thumbnail($file['path'], $thumb_path);
+    } else {
+        // Handle image files
+        switch ($file['type']) {
+            case IMAGETYPE_JPEG:
+            case IMAGETYPE_PNG:
+            case IMAGETYPE_GIF:
+                create_thumbnail($file['path'], $thumb_path, $thumb_width);
+                break;
+        }
     }
 }
 
@@ -1495,10 +1509,14 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                             if ($json_data !== false && $json_data !== null):
                         ?>
                         <div class="item" data-index="<?= $global_index++ ?>">
-                            <?php if (strpos($file['type'], 'video/') === 0): ?>
-                                <video poster="<?= $thumbs_dir . '/' . rawurlencode(basename($file['path'])) ?>">
-                                    <source src="<?= str_replace('\\', '/', dirname($file['path'])) . '/' . rawurlencode(basename($file['path'])) ?>" type="<?= $file['type'] ?>">
-                                </video>
+                            <?php 
+                            $is_video = preg_match(GalleryConfig::VIDEO_EXTENSIONS, $file['path']);
+                            if ($is_video): 
+                            ?>
+                                <!-- Use img for video thumbnails to prevent Firefox from preloading videos -->
+                                <img src="<?= $thumbs_dir . '/' . rawurlencode(basename($file['path'])) . '.jpg' ?>" 
+                                    alt="<?= htmlspecialchars(basename($file['path'])) ?>"
+                                    loading="lazy">
                                 <div class="play-button">▶</div>
                             <?php else: ?>
                                 <img src="<?= $thumbs_dir . '/' . rawurlencode(basename($file['path'])) ?>" 
@@ -1634,12 +1652,52 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 
                 // Get the file to display
                 const file = allMediaFiles[index];
+                console.log('Displaying file:', file.name, 'Type:', file.type, 'Browser:', navigator.userAgent.includes('Firefox') ? 'Firefox' : 'Other');
                 
                 if (file.type && file.type.toString().includes('video')) {
                     // Create video element for lightbox
                     const video = document.createElement('video');
                     video.controls = true;
-                    video.autoplay = true;
+                    video.preload = 'metadata'; // Better than autoplay for compatibility
+                    video.style.maxWidth = '100%';
+                    video.style.maxHeight = '85vh';
+                    
+                    console.log('Creating video element for:', file.name);
+                    
+                    // Firefox-specific handling
+                    const isFirefox = navigator.userAgent.includes('Firefox');
+                    if (isFirefox) {
+                        console.log('Firefox detected, applying specific handling');
+                        video.preload = 'auto'; // Firefox sometimes needs this
+                    }
+                    
+                    // Add error handling
+                    video.onerror = function(e) {
+                        console.error('Video failed to load:', file.path, 'Error:', e);
+                        // Create fallback message
+                        const fallback = document.createElement('div');
+                        fallback.style.color = 'white';
+                        fallback.style.textAlign = 'center';
+                        fallback.style.padding = '50px';
+                        fallback.innerHTML = `
+                            <h3>Video could not be loaded</h3>
+                            <p>File: ${file.name}</p>
+                            <p>Type: ${file.type}</p>
+                            <p>Browser: ${isFirefox ? 'Firefox' : 'Other'}</p>
+                            <a href="${source.src}" target="_blank" style="color: #3498db;">Download Video</a>
+                        `;
+                        lightboxContent.innerHTML = '';
+                        lightboxContent.appendChild(fallback);
+                    };
+                    
+                    // Add load event for debugging
+                    video.onloadstart = function() {
+                        console.log('Video load started:', file.name);
+                    };
+                    
+                    video.oncanplay = function() {
+                        console.log('Video can play:', file.name);
+                    };
                     
                     const source = document.createElement('source');
                     // Normalize path separators and construct proper URL
@@ -1650,7 +1708,21 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                     source.src = pathDir + '/' + encodedFilename;
                     source.type = file.type;
                     
+                    console.log('Video source URL:', source.src, 'Type:', source.type);
+                    
+                    // Add source error handling
+                    source.onerror = function(e) {
+                        console.error('Video source failed to load:', source.src, 'Error:', e);
+                    };
+                    
                     video.appendChild(source);
+                    
+                    // Add fallback text for unsupported formats
+                    const fallbackText = document.createElement('p');
+                    fallbackText.style.color = 'white';
+                    fallbackText.innerHTML = `Your browser does not support the video format. <a href="${source.src}" target="_blank" style="color: #3498db;">Download the video</a> to view it.`;
+                    video.appendChild(fallbackText);
+                    
                     lightboxContent.appendChild(video);
                 } else {
                     // Create image element for lightbox
