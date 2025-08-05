@@ -421,27 +421,48 @@ class GalleryConfig {
     public static function createAudioThumbnail($source, $destination, $width = 200) {
         global $ffmpeg_path;
         
-        // First, try to extract embedded album art using FFmpeg
+        // Use FFmpeg to directly extract thumbnail from audio file
         $ffmpeg_cmd = !empty($ffmpeg_path) ? $ffmpeg_path : 'ffmpeg';
-        $temp_art = $destination . '.temp.jpg';
         
-        // Try to extract album art
-        $command = "\"{$ffmpeg_cmd}\" -i \"{$source}\" -an -vcodec copy \"{$temp_art}\" 2>/dev/null";
+        // Try to extract embedded album art directly to destination
+        $command = "\"{$ffmpeg_cmd}\" -i \"{$source}\" \"{$destination}\" 2>&1";
+        error_log("Running ffmpeg command for audio thumbnail: " . $command);
+        
         exec($command, $output, $return_code);
+        $output_text = implode("\n", $output);
         
-        // If album art was extracted successfully, resize it and use it
-        if (file_exists($temp_art) && filesize($temp_art) > 0) {
-            // Resize the extracted album art to thumbnail size
-            $success = self::createImageThumbnail($temp_art, $destination, $width);
-            unlink($temp_art); // Clean up temp file
+        error_log("FFmpeg audio thumbnail return code: " . $return_code);
+        error_log("FFmpeg audio thumbnail output: " . $output_text);
+        
+        // Check if thumbnail was successfully created
+        if ($return_code === 0 && file_exists($destination) && filesize($destination) > 0) {
+            // FFmpeg successfully extracted album art, now resize it to proper thumbnail size
+            $temp_resized = $destination . '.resized.jpg';
+            $success = self::createImageThumbnail($destination, $temp_resized, $width);
             
-            if ($success) {
-                error_log("Audio thumbnail created from embedded album art: " . $destination);
+            if ($success && file_exists($temp_resized)) {
+                // Replace original with resized version
+                rename($temp_resized, $destination);
+                error_log("Audio thumbnail created and resized from embedded album art: " . $destination);
+                return true;
+            } else {
+                // If resize failed, keep the original extracted image
+                error_log("Audio thumbnail created from embedded album art (original size): " . $destination);
                 return true;
             }
         }
         
-        // If no album art found or extraction failed, create a preset thumbnail
+        // Check if the error indicates no embedded artwork
+        if (strpos($output_text, 'does not contain any stream') !== false || 
+            strpos($output_text, 'No video stream') !== false ||
+            $return_code !== 0) {
+            error_log("No embedded album art found in audio file, creating preset thumbnail");
+            // If no album art found or extraction failed, create a preset thumbnail
+            return self::createPresetAudioThumbnail($source, $destination, $width);
+        }
+        
+        // Fallback to preset thumbnail for any other errors
+        error_log("FFmpeg extraction failed, creating preset thumbnail");
         return self::createPresetAudioThumbnail($source, $destination, $width);
     }
     
