@@ -41,5 +41,6 @@ Done!
 
 ## Requirements:
 * [PHP 5.2=>](https://www.php.net/)
+* [Enable GD-support in PHP](https://www.php.net/manual/en/image.installation.php)
 * [ffmpeg](https://ffmpeg.org/) (in path)
 * [ffprobe](https://ffmpeg.org/ffprobe.html) (in path)
