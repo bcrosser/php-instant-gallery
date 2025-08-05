@@ -34,6 +34,94 @@ function debug_log($message) {
     }
 }
 
+// AJAX endpoint for lazy loading metadata
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'metadata') {
+    header('Content-Type: application/json');
+    
+    // Handle batch metadata requests
+    if (isset($_GET['batch']) && $_GET['batch'] === 'true' && isset($_GET['files'])) {
+        $filenames = explode(',', $_GET['files']);
+        $results = array();
+        $missing_files = array();
+        
+        foreach ($filenames as $filename) {
+            $filename = trim($filename);
+            
+            // Security check - only allow files from pics directory
+            if (strpos($filename, '..') !== false || strpos($filename, '/') !== false || strpos($filename, '\\') !== false) {
+                $results[$filename] = ['error' => 'Invalid filename'];
+                continue;
+            }
+            
+            // Try to get cached metadata first
+            $cached_metadata = GalleryConfig::getCachedMetadata($filename);
+            if ($cached_metadata !== null) {
+                $results[$filename] = $cached_metadata;
+                debug_log("Batch: Using cached metadata for {$filename}");
+            } else {
+                // Mark as missing for potential processing
+                $missing_files[] = $filename;
+                debug_log("Batch: No cached metadata for {$filename}");
+            }
+        }
+        
+        // Process missing files if requested (not on first batch call)
+        if (isset($_GET['process_missing']) && $_GET['process_missing'] === 'true') {
+            foreach ($missing_files as $filename) {
+                $metadata = GalleryConfig::getMetadataAjax($filename);
+                if ($metadata) {
+                    $results[$filename] = $metadata;
+                    debug_log("Batch: Generated metadata for {$filename}");
+                } else {
+                    $results[$filename] = ['error' => 'Could not extract metadata'];
+                    debug_log("Batch: Failed to generate metadata for {$filename}");
+                }
+            }
+        }
+        
+        // Include list of files that still need processing
+        $response = [
+            'results' => $results,
+            'missing_files' => isset($_GET['process_missing']) ? array() : $missing_files,
+            'total_requested' => count($filenames),
+            'total_returned' => count($results)
+        ];
+        
+        echo json_encode($response);
+        exit;
+    }
+    
+    // Handle single file metadata requests (backwards compatibility)
+    if (isset($_GET['file'])) {
+        $filename = $_GET['file'];
+        
+        // Security check - only allow files from pics directory
+        if (strpos($filename, '..') !== false || strpos($filename, '/') !== false || strpos($filename, '\\') !== false) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Invalid filename']);
+            exit;
+        }
+        
+        // Find the file in the directory structure
+        $file_path = GalleryConfig::findFileInDirectory($filename, $base_dir);
+        if (!$file_path) {
+            http_response_code(404);
+            echo json_encode(['error' => 'File not found']);
+            exit;
+        }
+        
+        // Get metadata using the caching system
+        $metadata = GalleryConfig::getMetadataAjax($filename);
+        
+        if ($metadata) {
+            echo json_encode($metadata);
+        } else {
+            echo json_encode(['error' => 'Could not extract metadata']);
+        }
+        exit;
+    }
+}
+
 // Constants and configuration arrays
 class GalleryConfig {
     // Supported file extensions
@@ -130,6 +218,12 @@ class GalleryConfig {
     }
     
     public static function createImageThumbnail($source, $destination, $width = 200) {
+        // Check if GD extension is available
+        if (!extension_loaded('gd')) {
+            debug_log("GD extension not available, skipping image thumbnail creation");
+            return false;
+        }
+        
         $filename = basename($source);
         
         // Handle PDF files specially
@@ -222,6 +316,12 @@ class GalleryConfig {
     }
     
     public static function createPDFThumbnail($source, $destination, $width = 200) {
+        // Check if GD extension is available
+        if (!extension_loaded('gd')) {
+            debug_log("GD extension not available, skipping PDF thumbnail creation");
+            return false;
+        }
+        
         // For PDFs, we'll use PDF.js on the client side to generate thumbnails
         // This function now just creates a temporary placeholder that will be replaced
         // by actual PDF page thumbnails generated in the browser
@@ -337,6 +437,12 @@ class GalleryConfig {
         }
         
         // Fallback: create a simple placeholder for SVG
+        // Check if GD extension is available
+        if (!extension_loaded('gd')) {
+            debug_log("GD extension not available, skipping SVG thumbnail creation");
+            return false;
+        }
+        
         $img = imagecreatetruecolor($width, $width);
         $bg_color = imagecolorallocate($img, 250, 250, 250);
         $text_color = imagecolorallocate($img, 80, 150, 80);
@@ -415,6 +521,12 @@ class GalleryConfig {
         
         // If still fails, create an empty placeholder
         if (!file_exists($destination) || filesize($destination) == 0) {
+            // Check if GD extension is available
+            if (!extension_loaded('gd')) {
+                debug_log("GD extension not available, skipping video thumbnail creation");
+                return;
+            }
+            
             // Create a black placeholder with text maintaining aspect ratio
             $img = imagecreatetruecolor($width, $height);
             $text_color = imagecolorallocate($img, 255, 255, 255);
@@ -480,6 +592,12 @@ class GalleryConfig {
     }
     
     private static function createPresetAudioThumbnail($source, $destination, $width = 200) {
+        // Check if GD extension is available
+        if (!extension_loaded('gd')) {
+            debug_log("GD extension not available, skipping thumbnail creation");
+            return false;
+        }
+        
         // Create an attractive audio thumbnail with waveform-like design
         $height = $width; // Square thumbnail
         
@@ -1034,6 +1152,134 @@ class GalleryConfig {
             }
         ];
     }
+    
+    // Metadata caching for video and audio files
+    public static function getMetadataCachePath($filename) {
+        global $thumbs_dir;
+        $basename = pathinfo($filename, PATHINFO_FILENAME);
+        return "{$thumbs_dir}/{$basename}.metadata";
+    }
+    
+    public static function findFileInDirectory($filename, $search_dir) {
+        global $base_dir;
+        
+        // If no search directory specified, use base directory
+        if (!$search_dir) {
+            $search_dir = $base_dir;
+        }
+        
+        // First check if file exists directly in the search directory
+        $direct_path = "{$search_dir}/{$filename}";
+        if (file_exists($direct_path)) {
+            return $direct_path;
+        }
+        
+        // If not found, search recursively through subdirectories
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($search_dir, RecursiveDirectoryIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::SELF_FIRST
+        );
+        
+        foreach ($iterator as $file_info) {
+            if ($file_info->isFile() && $file_info->getFilename() === $filename) {
+                return $file_info->getPathname();
+            }
+        }
+        
+        return null;
+    }
+    
+    public static function getCachedMetadata($filename, $original_path = null) {
+        global $base_dir;
+        
+        $cache_path = self::getMetadataCachePath($filename);
+        
+        // If original path not provided, try to find it
+        if (!$original_path) {
+            $original_path = self::findFileInDirectory($filename, $base_dir);
+        }
+        
+        if (!$original_path || !file_exists($original_path)) {
+            debug_log("Original file not found for cached metadata: {$filename}");
+            return null;
+        }
+        
+        // Check if cache exists and is newer than the original file
+        if (file_exists($cache_path)) {
+            $cache_time = filemtime($cache_path);
+            $original_time = filemtime($original_path);
+            
+            if ($cache_time >= $original_time) {
+                $cached_data = file_get_contents($cache_path);
+                $metadata = json_decode($cached_data, true);
+                
+                if ($metadata !== null) {
+                    debug_log("Loaded cached metadata for {$filename}");
+                    return $metadata;
+                }
+            }
+        }
+        
+        debug_log("No valid cached metadata found for {$filename}");
+        return null;
+    }
+    
+    public static function cacheMetadata($filename, $metadata) {
+        global $thumbs_dir;
+        
+        $cache_path = self::getMetadataCachePath($filename);
+        
+        // Ensure thumbs directory exists
+        if (!file_exists($thumbs_dir)) {
+            mkdir($thumbs_dir, 0755, true);
+        }
+        
+        $cached_data = json_encode($metadata, JSON_PRETTY_PRINT);
+        
+        if (file_put_contents($cache_path, $cached_data) !== false) {
+            debug_log("Cached metadata for {$filename}");
+            return true;
+        } else {
+            debug_log("Failed to cache metadata for {$filename}");
+            return false;
+        }
+    }
+    
+    public static function getMetadataAjax($filename) {
+        global $base_dir;
+        
+        // First find the actual file path
+        $file_path = self::findFileInDirectory($filename, $base_dir);
+        
+        if (!$file_path) {
+            debug_log("File not found in directory structure: {$filename}");
+            return null;
+        }
+        
+        debug_log("Found file at: {$file_path}");
+        
+        // Try to get cached metadata
+        $cached = self::getCachedMetadata($filename, $file_path);
+        if ($cached !== null) {
+            return $cached;
+        }
+        
+        // If not cached, extract metadata and cache it
+        if (self::isVideo($filename)) {
+            $metadata = self::getVideoMetadata($file_path);
+        } else if (self::isAudio($filename)) {
+            $metadata = self::getAudioMetadata($file_path);
+        } else {
+            debug_log("File is not video or audio: {$filename}");
+            return null;
+        }
+        
+        if ($metadata) {
+            self::cacheMetadata($filename, $metadata);
+        }
+        
+        return $metadata;
+    }
 }
 
 // Utility functions for file grouping and sorting
@@ -1158,6 +1404,11 @@ if (!file_exists($thumbs_dir)) {
 
 // Function to create thumbnails
 function create_thumbnail($source, $destination, $width) {
+    // Check if GD extension is available
+    if (!extension_loaded('gd')) {
+        return false;
+    }
+    
     // Get image dimensions
     $dims = getimagesize($source);
     $w = $dims[0];
@@ -1379,36 +1630,20 @@ function get_media_files($dir) {
                 // Use centralized video MIME type detection
                 $type = GalleryConfig::getVideoMimeType($filename);
                 
-                // Extract comprehensive metadata from video using centralized method
-                $video_metadata = GalleryConfig::getVideoMetadata($path);
-                if ($video_metadata) {
-                    $taken = $video_metadata['creation_date'] ?: 0;
-                    $exif = $video_metadata['metadata'];
-                    
-                    // Debug: Log video metadata extraction
-                    debug_log("Video metadata for {$filename}: " . print_r($video_metadata, true));
-                } else {
-                    $taken = 0;
-                    $exif = null;
-                    debug_log("No video metadata found for {$filename}");
-                }
+                // Skip metadata extraction for performance - will be loaded via AJAX
+                $taken = $file_info->getMTime(); // Use file modification time as fallback
+                $exif = null; // Will be loaded lazily
+                
+                debug_log("Video file detected, metadata will be loaded lazily: {$filename}");
             } else if (GalleryConfig::isAudio($filename)) {
                 // Use centralized audio MIME type detection
                 $type = GalleryConfig::getAudioMimeType($filename);
                 
-                // Extract comprehensive metadata from audio using centralized method
-                $audio_metadata = GalleryConfig::getAudioMetadata($path);
-                if ($audio_metadata) {
-                    $taken = $audio_metadata['creation_date'] ?: 0;
-                    $exif = $audio_metadata['metadata'];
-                    
-                    // Debug: Log audio metadata extraction
-                    debug_log("Audio metadata for {$filename}: " . print_r($audio_metadata, true));
-                } else {
-                    $taken = 0;
-                    $exif = null;
-                    debug_log("No audio metadata found for {$filename}");
-                }
+                // Skip metadata extraction for performance - will be loaded via AJAX
+                $taken = $file_info->getMTime(); // Use file modification time as fallback
+                $exif = null; // Will be loaded lazily
+                
+                debug_log("Audio file detected, metadata will be loaded lazily: {$filename}");
             }
             
             // If no taken date found, use modification time
@@ -2552,6 +2787,57 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 font-size: 10px;
             }
         }
+        
+        /* Lazy loading metadata styles */
+        .metadata-details {
+            margin-top: 10px;
+        }
+        
+        .metadata-toggle {
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 8px 12px;
+            cursor: pointer;
+            border-radius: 4px;
+            margin-bottom: 8px;
+            font-size: 14px;
+            user-select: none;
+        }
+        
+        .metadata-toggle:hover {
+            background: rgba(0, 0, 0, 0.8);
+        }
+        
+        .metadata-content {
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 12px;
+            border-radius: 4px;
+            font-size: 13px;
+            line-height: 1.4;
+        }
+        
+        .metadata-content div {
+            margin-bottom: 6px;
+        }
+        
+        .metadata-content div:last-child {
+            margin-bottom: 0;
+        }
+        
+        .duration {
+            color: #3498db;
+        }
+        
+        .metadata-loading .metadata-toggle {
+            background: rgba(52, 152, 219, 0.7);
+            animation: pulse 1.5s ease-in-out infinite alternate;
+        }
+        
+        @keyframes pulse {
+            from { opacity: 0.7; }
+            to { opacity: 1; }
+        }
     </style>
 </head>
 <body>
@@ -2926,6 +3212,29 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
     </div>
 
     <script>
+        // Configuration constants
+        const SCRIPT_URL = <?= json_encode(basename($_SERVER['PHP_SELF'])) ?>;
+        const DEBUG_MODE = <?= json_encode($debug_mode) ?>;
+        
+        // Debug console functions that respect PHP debug mode
+        function debugLog(...args) {
+            if (DEBUG_MODE) {
+                console.log(...args);
+            }
+        }
+        
+        function debugError(...args) {
+            if (DEBUG_MODE) {
+                console.error(...args);
+            }
+        }
+        
+        function debugWarn(...args) {
+            if (DEBUG_MODE) {
+                console.warn(...args);
+            }
+        }
+        
         // Gallery Management Class - Centralized JavaScript functionality
         class InstantGallery {
             constructor() {
@@ -2945,6 +3254,9 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 this.setupEventListeners();
                 this.setupURLParameters();
                 this.setupThumbnailSizeControl();
+                
+                // Start background metadata loading for video/audio files
+                this.startBackgroundMetadataLoading();
             }
             
             // Media file loading
@@ -3017,24 +3329,24 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 video.style.maxWidth = '100%';
                 video.style.maxHeight = '85vh';
                 
-                console.log('Creating video element for:', file.name);
+                debugLog('Creating video element for:', file.name);
                 
                 // Firefox-specific handling
                 const isFirefox = navigator.userAgent.includes('Firefox');
                 if (isFirefox) {
-                    console.log('Firefox detected, applying specific handling');
+                    debugLog('Firefox detected, applying specific handling');
                     video.preload = 'auto';
                 }
                 
                 // Add error handling
                 video.onerror = (e) => {
-                    console.error('Video failed to load:', file.path, 'Error:', e);
+                    debugError('Video failed to load:', file.path, 'Error:', e);
                     this.createVideoFallback(file);
                 };
                 
                 // Add load events for debugging
-                video.onloadstart = () => console.log('Video load started:', file.name);
-                video.oncanplay = () => console.log('Video can play:', file.name);
+                video.onloadstart = () => debugLog('Video load started:', file.name);
+                video.oncanplay = () => debugLog('Video can play:', file.name);
                 
                 // Create source element
                 const source = document.createElement('source');
@@ -3045,9 +3357,9 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 source.src = pathDir + '/' + encodedFilename;
                 source.type = file.type;
                 
-                console.log('Video source URL:', source.src, 'Type:', source.type);
+                debugLog('Video source URL:', source.src, 'Type:', source.type);
                 
-                source.onerror = (e) => console.error('Video source failed to load:', source.src, 'Error:', e);
+                source.onerror = (e) => debugError('Video source failed to load:', source.src, 'Error:', e);
                 
                 video.appendChild(source);
                 
@@ -3190,7 +3502,7 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                     const pathDir = pathParts.join('/');
                     const pdfUrl = pathDir + '/' + encodedFilename;
 
-                    console.log('Loading PDF:', pdfUrl);
+                    debugLog('Loading PDF:', pdfUrl);
 
                     const pdf = await pdfjsLib.getDocument(pdfUrl).promise;
                     
@@ -3262,10 +3574,10 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                             pageInput.value = pageNum;
                             currentPage = pageNum;
 
-                            console.log(`Rendered PDF page ${pageNum}/${pdf.numPages}`);
+                            debugLog(`Rendered PDF page ${pageNum}/${pdf.numPages}`);
 
                         } catch (error) {
-                            console.error('Error rendering PDF page:', error);
+                            debugError('Error rendering PDF page:', error);
                             this.showPDFError(container, 'Failed to render PDF page');
                         } finally {
                             renderingPage = false;
@@ -3316,7 +3628,7 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                     await renderPage(1);
 
                 } catch (error) {
-                    console.error('Error loading PDF:', error);
+                    debugError('Error loading PDF:', error);
                     this.showPDFError(container, 'Failed to load PDF: ' + error.message, file);
                 }
             }
@@ -3350,9 +3662,9 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             
             // Metadata creation utilities
             createMetadata(file) {
-                console.log('Creating metadata for file:', file.name);
-                console.log('EXIF data available:', !!file.exif_data);
-                console.log('EXIF data content:', file.exif_data);
+                debugLog('Creating metadata for file:', file.name);
+                debugLog('EXIF data available:', !!file.exif_data);
+                debugLog('EXIF data content:', file.exif_data);
                 
                 const metadataDiv = document.createElement('div');
                 metadataDiv.className = 'lightbox-metadata';
@@ -3380,7 +3692,7 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                     const exifDiv = this.createExifSection(file.exif_data);
                     metadataDiv.appendChild(exifDiv);
                 } else {
-                    console.log('No EXIF data found or EXIF data is empty');
+                    debugLog('No EXIF data found or EXIF data is empty');
                 }
                 
                 return metadataDiv;
@@ -3420,6 +3732,237 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 return exifDiv;
             }
             
+            // Lazy metadata loading
+            async loadMetadata(filename, priority = false) {
+                try {
+                    // Show loading indicator if priority load
+                    if (priority) {
+                        const metadataDiv = this.lightboxContent.querySelector('.lightbox-metadata');
+                        if (metadataDiv) {
+                            const loadingDiv = document.createElement('div');
+                            loadingDiv.className = 'metadata-loading';
+                            loadingDiv.innerHTML = '<div class="metadata-toggle">Loading media details...</div>';
+                            metadataDiv.appendChild(loadingDiv);
+                        }
+                    }
+                    
+                    const response = await fetch(`${SCRIPT_URL}?ajax=metadata&file=${encodeURIComponent(filename)}`);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    const metadata = await response.json();
+                    
+                    if (metadata.error) {
+                        debugError('Metadata error:', metadata.error);
+                        return null;
+                    }
+                    
+                    // Update the file in allMediaFiles with the loaded metadata
+                    const fileIndex = this.allMediaFiles.findIndex(f => f.name === filename);
+                    if (fileIndex !== -1) {
+                        this.allMediaFiles[fileIndex].lazy_metadata = metadata;
+                        
+                        // If this is the currently displayed file, update the metadata display
+                        if (fileIndex === this.currentIndex && this.lightbox.classList.contains('active')) {
+                            // Remove loading indicator
+                            const loadingDiv = this.lightboxContent.querySelector('.metadata-loading');
+                            if (loadingDiv) {
+                                loadingDiv.remove();
+                            }
+                            
+                            this.updateMetadataDisplay(this.allMediaFiles[fileIndex]);
+                        }
+                        
+                        debugLog(priority ? 'Priority loaded' : 'Background loaded', 'metadata for:', filename);
+                    }
+                    
+                    return metadata;
+                } catch (error) {
+                    debugError('Failed to load metadata for', filename, ':', error);
+                    
+                    // Remove loading indicator on error
+                    const loadingDiv = this.lightboxContent.querySelector('.metadata-loading');
+                    if (loadingDiv) {
+                        loadingDiv.remove();
+                    }
+                    
+                    return null;
+                }
+            }
+            
+            updateMetadataDisplay(file) {
+                if (!file.lazy_metadata) return;
+                
+                const metadataDiv = this.lightboxContent.querySelector('.lightbox-metadata');
+                if (!metadataDiv) return;
+                
+                // Add duration info for video/audio
+                if (file.lazy_metadata.metadata && file.lazy_metadata.metadata.duration) {
+                    const duration = this.formatDuration(file.lazy_metadata.metadata.duration);
+                    const basicMetadata = metadataDiv.querySelector('.metadata-basic');
+                    if (basicMetadata && !basicMetadata.querySelector('.duration')) {
+                        const durationSpan = document.createElement('span');
+                        durationSpan.className = 'duration filesize';
+                        durationSpan.textContent = `Duration: ${duration}`;
+                        basicMetadata.appendChild(durationSpan);
+                    }
+                }
+                
+                // Add detailed metadata section
+                if (file.lazy_metadata.metadata && Object.keys(file.lazy_metadata.metadata).length > 0) {
+                    const existingDetails = metadataDiv.querySelector('.metadata-details');
+                    if (!existingDetails) {
+                        const detailsDiv = this.createDetailedMetadataSection(file.lazy_metadata.metadata);
+                        metadataDiv.appendChild(detailsDiv);
+                    }
+                }
+            }
+            
+            createDetailedMetadataSection(metadata) {
+                const detailsDiv = document.createElement('div');
+                detailsDiv.className = 'metadata-details';
+                
+                const toggleDiv = document.createElement('div');
+                toggleDiv.className = 'metadata-toggle';
+                toggleDiv.innerHTML = 'Media Details ▼';
+                
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'metadata-content';
+                contentDiv.style.display = 'none';
+                
+                toggleDiv.addEventListener('click', () => {
+                    const isHidden = contentDiv.style.display === 'none';
+                    contentDiv.style.display = isHidden ? 'block' : 'none';
+                    toggleDiv.innerHTML = isHidden ? 'Media Details ▲' : 'Media Details ▼';
+                });
+                
+                let content = '';
+                for (const [key, value] of Object.entries(metadata)) {
+                    if (value && value !== '' && value !== 'Unknown') {
+                        const displayKey = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                        if (key === 'duration') {
+                            content += `<div><strong>${displayKey}:</strong> ${this.formatDuration(value)}</div>`;
+                        } else {
+                            content += `<div><strong>${displayKey}:</strong> ${value}</div>`;
+                        }
+                    }
+                }
+                
+                contentDiv.innerHTML = content;
+                detailsDiv.appendChild(toggleDiv);
+                detailsDiv.appendChild(contentDiv);
+                
+                return detailsDiv;
+            }
+            
+            formatDuration(seconds) {
+                const hours = Math.floor(seconds / 3600);
+                const minutes = Math.floor((seconds % 3600) / 60);
+                const secs = Math.floor(seconds % 60);
+                
+                if (hours > 0) {
+                    return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+                } else {
+                    return `${minutes}:${secs.toString().padStart(2, '0')}`;
+                }
+            }
+            
+            // Batch metadata loading
+            async loadMetadataBatch(filenames, processMissing = false) {
+                try {
+                    const fileParams = filenames.join(',');
+                    const url = `${SCRIPT_URL}?ajax=metadata&batch=true&files=${encodeURIComponent(fileParams)}${processMissing ? '&process_missing=true' : ''}`;
+                    
+                    debugLog(`Batch loading metadata for ${filenames.length} files`, processMissing ? '(processing missing)' : '(cached only)');
+                    
+                    const response = await fetch(url);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    
+                    const batchResult = await response.json();
+                    
+                    if (batchResult.error) {
+                        debugError('Batch metadata error:', batchResult.error);
+                        return null;
+                    }
+                    
+                    // Update allMediaFiles with the loaded metadata
+                    for (const [filename, metadata] of Object.entries(batchResult.results)) {
+                        if (metadata.error) {
+                            debugWarn(`Metadata error for ${filename}:`, metadata.error);
+                            continue;
+                        }
+                        
+                        const fileIndex = this.allMediaFiles.findIndex(f => f.name === filename);
+                        if (fileIndex !== -1) {
+                            this.allMediaFiles[fileIndex].lazy_metadata = metadata;
+                            
+                            // If this is the currently displayed file, update the metadata display
+                            if (fileIndex === this.currentIndex && this.lightbox.classList.contains('active')) {
+                                this.updateMetadataDisplay(this.allMediaFiles[fileIndex]);
+                            }
+                        }
+                    }
+                    
+                    debugLog(`Batch loaded metadata for ${Object.keys(batchResult.results).length}/${batchResult.total_requested} files`);
+                    
+                    return batchResult;
+                } catch (error) {
+                    debugError('Failed to batch load metadata:', error);
+                    return null;
+                }
+            }
+            
+            // Legacy single file metadata loading (for priority loads)
+            async loadMetadata(filename, priority = false) {
+                // For priority loads, try batch loading with just this file first
+                if (priority) {
+                    const result = await this.loadMetadataBatch([filename], true);
+                    return result && result.results[filename] ? result.results[filename] : null;
+                }
+                
+                // For non-priority loads, use the batch system
+                return await this.loadMetadataBatch([filename], false);
+            }
+            
+            startBackgroundMetadataLoading() {
+                // Get all video and audio files that need metadata
+                const mediaFiles = this.allMediaFiles.filter(file => 
+                    file.type && (file.type.includes('video') || file.type.includes('audio')) && !file.lazy_metadata
+                );
+                
+                if (mediaFiles.length === 0) {
+                    debugLog('No media files need metadata loading');
+                    return;
+                }
+                
+                const filenames = mediaFiles.map(file => file.name);
+                debugLog(`Starting batch metadata loading for ${filenames.length} files`);
+                
+                // Phase 1: Load cached metadata immediately
+                this.loadMetadataBatch(filenames, false).then(result => {
+                    if (!result) return;
+                    
+                    debugLog(`Phase 1 complete: ${Object.keys(result.results).length} cached metadata loaded`);
+                    
+                    // Phase 2: Process missing files after a delay if there are any
+                    if (result.missing_files && result.missing_files.length > 0) {
+                        debugLog(`Phase 2: Will process ${result.missing_files.length} missing files in 2 seconds`);
+                        
+                        setTimeout(() => {
+                            this.loadMetadataBatch(result.missing_files, true).then(missResult => {
+                                if (missResult) {
+                                    debugLog(`Phase 2 complete: ${Object.keys(missResult.results).length} metadata generated`);
+                                }
+                            });
+                        }, 2000);
+                    } else {
+                        debugLog('Phase 2: No missing files to process');
+                    }
+                });
+            }
+            
             // Main lightbox display function
             showMedia(index) {
                 // Make sure index is within bounds
@@ -3430,7 +3973,7 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 this.lightboxContent.innerHTML = '';
                 
                 const file = this.allMediaFiles[index];
-                console.log('Displaying file:', file.name, 'Type:', file.type, 'Browser:', navigator.userAgent.includes('Firefox') ? 'Firefox' : 'Other');
+                debugLog('Displaying file:', file.name, 'Type:', file.type, 'Browser:', navigator.userAgent.includes('Firefox') ? 'Firefox' : 'Other');
                 
                 // Create appropriate media element
                 if (file.type && file.type.toString().includes('video')) {
@@ -3450,6 +3993,16 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 // Add metadata (for non-PDF files)
                 const metadata = this.createMetadata(file);
                 this.lightboxContent.appendChild(metadata);
+                
+                // Priority load metadata for video/audio files when clicked
+                if (file.type && (file.type.includes('video') || file.type.includes('audio'))) {
+                    if (!file.lazy_metadata) {
+                        this.loadMetadata(file.name, true); // Priority load
+                    } else {
+                        // Metadata already loaded, update display immediately
+                        this.updateMetadataDisplay(file);
+                    }
+                }
             }
             
             // Navigation methods
@@ -3761,7 +4314,7 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
         // PDF thumbnail generation using PDF.js
         async function generatePDFThumbnails() {
             if (typeof pdfjsLib === 'undefined') {
-                console.warn('PDF.js not loaded, skipping PDF thumbnail generation');
+                debugWarn('PDF.js not loaded, skipping PDF thumbnail generation');
                 return;
             }
 
@@ -3776,7 +4329,7 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                     const pdfPath = canvas.dataset.pdfPath;
                     if (!pdfPath) continue;
                     
-                    console.log('Generating PDF thumbnail for:', pdfPath);
+                    debugLog('Generating PDF thumbnail for:', pdfPath);
                     
                     // First, draw a generic placeholder
                     const context = canvas.getContext('2d');
@@ -3839,10 +4392,10 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                         
                         await page.render(renderContext).promise;
                         
-                        console.log('PDF thumbnail generated successfully for:', pdfPath);
+                        debugLog('PDF thumbnail generated successfully for:', pdfPath);
                         
                     } catch (pdfError) {
-                        console.warn('Failed to render PDF page, keeping placeholder:', pdfError);
+                        debugWarn('Failed to render PDF page, keeping placeholder:', pdfError);
                         // Keep the placeholder that was already drawn
                     }
                     
@@ -3850,7 +4403,7 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                     canvas.dataset.pdfProcessed = 'true';
                     
                 } catch (error) {
-                    console.warn('Failed to generate PDF thumbnail:', error);
+                    debugWarn('Failed to generate PDF thumbnail:', error);
                 }
             }
         }
@@ -3927,7 +4480,7 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 // Clear previous audio indicators
                 this.clearAudioIndicators();
                 
-                console.log('Loading audio:', audioPath);
+                debugLog('Loading audio:', audioPath);
             }
             
             show() {
@@ -3953,7 +4506,7 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                     this.playPauseBtn.textContent = '⏸';
                     this.updateAudioIndicators();
                 }).catch(error => {
-                    console.error('Error playing audio:', error);
+                    debugError('Error playing audio:', error);
                 });
             }
             
@@ -4049,6 +4602,13 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
         function playAudio(audioPath, title) {
             window.audioPlayer.load(audioPath, title);
             window.audioPlayer.play();
+        }
+
+        // Global function to open viewer (called from HTML onclick)
+        function openViewer(index, filePath, fileType) {
+            if (window.gallery) {
+                window.gallery.openLightbox(index);
+            }
         }
 
         // Initialize gallery when DOM is ready
