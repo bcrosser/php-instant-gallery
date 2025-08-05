@@ -24,9 +24,10 @@ $external_links = [
 // Constants and configuration arrays
 class GalleryConfig {
     // Supported file extensions
-    const SUPPORTED_EXTENSIONS = '/\.(jpg|jpeg|gif|png|webp|bmp|ico|apng|svg|pdf|mp4|webm|ogg|ogv|3gp|qt|mov|qtff|avi)$/i';
+    const SUPPORTED_EXTENSIONS = '/\.(jpg|jpeg|gif|png|webp|bmp|ico|apng|svg|pdf|mp4|webm|ogg|ogv|3gp|qt|mov|qtff|avi|mp3|opus|wav|flac|aac)$/i';
     const IMAGE_EXTENSIONS = '/\.(jpg|gif|jpeg|png|webp|bmp|ico|apng|svg|pdf)$/i';
     const VIDEO_EXTENSIONS = '/\.(mp4|webm|ogg|ogv|3gp|qt|mov|qtff|avi)$/i';
+    const AUDIO_EXTENSIONS = '/\.(mp3|opus|wav|flac|aac)$/i';
     
     // Video utilities
     public static function isVideo($filename) {
@@ -35,6 +36,10 @@ class GalleryConfig {
     
     public static function isImage($filename) {
         return preg_match(self::IMAGE_EXTENSIONS, $filename);
+    }
+    
+    public static function isAudio($filename) {
+        return preg_match(self::AUDIO_EXTENSIONS, $filename);
     }
     
     public static function isPDF($filename) {
@@ -83,12 +88,32 @@ class GalleryConfig {
         }
     }
     
+    public static function getAudioMimeType($filename) {
+        if (preg_match('/\.mp3$/i', $filename)) {
+            return 'audio/mpeg';
+        } else if (preg_match('/\.opus$/i', $filename)) {
+            return 'audio/opus';
+        } else if (preg_match('/\.wav$/i', $filename)) {
+            return 'audio/wav';
+        } else if (preg_match('/\.flac$/i', $filename)) {
+            return 'audio/flac';
+        } else if (preg_match('/\.aac$/i', $filename)) {
+            return 'audio/aac';
+        } else {
+            return 'audio/mpeg'; // Default fallback
+        }
+    }
+    
     public static function getVideoThumbnailPath($video_path, $thumbs_dir) {
         return $thumbs_dir . '/' . basename($video_path) . '.jpg';
     }
     
     public static function getImageThumbnailPath($image_path, $thumbs_dir) {
         return $thumbs_dir . '/' . basename($image_path) . '.jpg';
+    }
+    
+    public static function getAudioThumbnailPath($audio_path, $thumbs_dir) {
+        return $thumbs_dir . '/' . basename($audio_path) . '.jpg';
     }
     
     public static function createImageThumbnail($source, $destination, $width = 200) {
@@ -393,6 +418,106 @@ class GalleryConfig {
         }
     }
     
+    public static function createAudioThumbnail($source, $destination, $width = 200) {
+        global $ffmpeg_path;
+        
+        // First, try to extract embedded album art using FFmpeg
+        $ffmpeg_cmd = !empty($ffmpeg_path) ? $ffmpeg_path : 'ffmpeg';
+        $temp_art = $destination . '.temp.jpg';
+        
+        // Try to extract album art
+        $command = "\"{$ffmpeg_cmd}\" -i \"{$source}\" -an -vcodec copy \"{$temp_art}\" 2>/dev/null";
+        exec($command, $output, $return_code);
+        
+        // If album art was extracted successfully, resize it and use it
+        if (file_exists($temp_art) && filesize($temp_art) > 0) {
+            // Resize the extracted album art to thumbnail size
+            $success = self::createImageThumbnail($temp_art, $destination, $width);
+            unlink($temp_art); // Clean up temp file
+            
+            if ($success) {
+                error_log("Audio thumbnail created from embedded album art: " . $destination);
+                return true;
+            }
+        }
+        
+        // If no album art found or extraction failed, create a preset thumbnail
+        return self::createPresetAudioThumbnail($source, $destination, $width);
+    }
+    
+    private static function createPresetAudioThumbnail($source, $destination, $width = 200) {
+        // Create an attractive audio thumbnail with waveform-like design
+        $height = $width; // Square thumbnail
+        
+        $img = imagecreatetruecolor($width, $height);
+        
+        // Audio player colors
+        $bg_color = imagecolorallocate($img, 45, 47, 54);        // Dark background
+        $accent_color = imagecolorallocate($img, 29, 185, 84);   // Spotify green
+        $text_color = imagecolorallocate($img, 255, 255, 255);   // White text
+        $wave_color = imagecolorallocate($img, 29, 185, 84);     // Green waves
+        $dim_wave_color = imagecolorallocate($img, 83, 83, 91);  // Dimmed waves
+        
+        // Fill background
+        imagefill($img, 0, 0, $bg_color);
+        
+        // Draw border
+        imagerectangle($img, 0, 0, $width-1, $height-1, $accent_color);
+        imagerectangle($img, 1, 1, $width-2, $height-2, $accent_color);
+        
+        // Draw waveform visualization
+        $center_y = $height / 2;
+        $wave_width = 3;
+        $wave_spacing = 5;
+        $num_waves = floor(($width - 40) / $wave_spacing);
+        $start_x = ($width - ($num_waves * $wave_spacing)) / 2;
+        
+        for ($i = 0; $i < $num_waves; $i++) {
+            $x = $start_x + ($i * $wave_spacing);
+            
+            // Create pseudo-random wave heights for visual effect
+            $seed = ($i * 7 + 13) % 17; // Simple pseudo-random
+            $wave_height = 10 + ($seed * 3);
+            
+            // Use accent color for some waves, dimmed for others
+            $color = ($i % 3 == 0) ? $wave_color : $dim_wave_color;
+            
+            // Draw vertical wave bar
+            imagefilledrectangle($img, $x, $center_y - $wave_height/2, 
+                               $x + $wave_width, $center_y + $wave_height/2, $color);
+        }
+        
+        // Draw music icon in the center
+        $icon_x = $width / 2;
+        $icon_y = $height / 2;
+        
+        // Draw a simple but recognizable musical note using basic shapes
+        // Main note head (filled circle)
+        imagefilledellipse($img, $icon_x, $icon_y + 5, 16, 12, $text_color);
+        
+        // Note stem (vertical line)
+        imagefilledrectangle($img, $icon_x + 6, $icon_y - 20, $icon_x + 9, $icon_y + 5, $text_color);
+        
+        // Musical note flag (curved shape approximated with rectangles)
+        imagefilledrectangle($img, $icon_x + 9, $icon_y - 20, $icon_x + 20, $icon_y - 15, $text_color);
+        imagefilledrectangle($img, $icon_x + 15, $icon_y - 15, $icon_x + 22, $icon_y - 8, $text_color);
+        
+        // Get file extension for format label
+        $extension = strtoupper(pathinfo($source, PATHINFO_EXTENSION));
+        $format_text = $extension;
+        $format_font = 2;
+        $format_width = strlen($format_text) * imagefontwidth($format_font);
+        $format_x = ($width - $format_width) / 2;
+        $format_y = $height - 25;
+        imagestring($img, $format_font, $format_x, $format_y, $format_text, $text_color);
+        
+        $success = imagejpeg($img, $destination, 85);
+        imagedestroy($img);
+        
+        error_log("Audio preset thumbnail created: " . $destination);
+        return $success;
+    }
+    
     public static function getVideoCreationDate($video_path) {
         $metadata = self::getVideoMetadata($video_path);
         
@@ -514,6 +639,136 @@ class GalleryConfig {
                     if (isset($stream['bit_rate'])) $extracted_metadata['Audio Bitrate'] = round($stream['bit_rate'] / 1000) . ' kbps';
                     if (isset($stream['sample_rate'])) $extracted_metadata['Sample Rate'] = $stream['sample_rate'] . ' Hz';
                     if (isset($stream['channels'])) $extracted_metadata['Audio Channels'] = $stream['channels'];
+                }
+            }
+        }
+        
+        // Add duration from format if not found in streams
+        if (!isset($extracted_metadata['Duration']) && isset($metadata['format']['duration'])) {
+            $duration = (float)$metadata['format']['duration'];
+            $extracted_metadata['Duration'] = gmdate('H:i:s', $duration);
+        }
+        
+        // Add file size
+        if (isset($metadata['format']['size'])) {
+            $size = (int)$metadata['format']['size'];
+            if ($size < 1024 * 1024) {
+                $extracted_metadata['File Size'] = round($size / 1024, 1) . ' KB';
+            } else if ($size < 1024 * 1024 * 1024) {
+                $extracted_metadata['File Size'] = round($size / (1024 * 1024), 1) . ' MB';
+            } else {
+                $extracted_metadata['File Size'] = round($size / (1024 * 1024 * 1024), 1) . ' GB';
+            }
+        }
+        
+        return array(
+            'creation_date' => $creation_date,
+            'metadata' => $extracted_metadata
+        );
+    }
+    
+    public static function getAudioMetadata($audio_path) {
+        global $ffprobe_path;
+        
+        // Determine ffprobe executable path
+        $ffprobe_cmd = !empty($ffprobe_path) ? $ffprobe_path : 'ffprobe';
+        
+        // Get both format and stream metadata for audio
+        $command = "\"{$ffprobe_cmd}\" -v quiet -print_format json -show_format -show_streams \"{$audio_path}\"";
+        error_log("Running ffprobe command for audio: " . $command);
+        $output = shell_exec($command);
+        
+        if (empty($output)) {
+            error_log("FFprobe returned empty output for audio: " . $audio_path);
+            return null;
+        }
+        
+        $metadata = json_decode($output, true);
+        
+        if (empty($metadata)) {
+            error_log("Failed to decode JSON from ffprobe output for audio: " . $audio_path);
+            return null;
+        }
+        
+        error_log("Successfully decoded ffprobe metadata for audio: " . $audio_path);
+        
+        $extracted_metadata = array();
+        $creation_date = null;
+        
+        // Extract format metadata (container level)
+        if (isset($metadata['format']) && isset($metadata['format']['tags'])) {
+            $tags = $metadata['format']['tags'];
+            
+            // Try different possible tag names for creation date
+            $date_keys = ['creation_time', 'date', 'DATE', 'TDRC', 'year', 'YEAR'];
+            
+            foreach ($date_keys as $key) {
+                if (isset($tags[$key])) {
+                    $date = strtotime($tags[$key]);
+                    if ($date !== false) {
+                        $creation_date = $date;
+                        $extracted_metadata['Date Created'] = date('Y-m-d H:i:s', $date);
+                        break;
+                    }
+                }
+            }
+            
+            // Extract audio-specific metadata
+            if (isset($tags['title']) || isset($tags['TITLE'])) {
+                $extracted_metadata['Title'] = $tags['title'] ?? $tags['TITLE'];
+            }
+            if (isset($tags['artist']) || isset($tags['ARTIST'])) {
+                $extracted_metadata['Artist'] = $tags['artist'] ?? $tags['ARTIST'];
+            }
+            if (isset($tags['album']) || isset($tags['ALBUM'])) {
+                $extracted_metadata['Album'] = $tags['album'] ?? $tags['ALBUM'];
+            }
+            if (isset($tags['genre']) || isset($tags['GENRE'])) {
+                $extracted_metadata['Genre'] = $tags['genre'] ?? $tags['GENRE'];
+            }
+            if (isset($tags['track']) || isset($tags['TRACK'])) {
+                $extracted_metadata['Track'] = $tags['track'] ?? $tags['TRACK'];
+            }
+            if (isset($tags['albumartist']) || isset($tags['ALBUMARTIST'])) {
+                $extracted_metadata['Album Artist'] = $tags['albumartist'] ?? $tags['ALBUMARTIST'];
+            }
+            if (isset($tags['composer']) || isset($tags['COMPOSER'])) {
+                $extracted_metadata['Composer'] = $tags['composer'] ?? $tags['COMPOSER'];
+            }
+            if (isset($tags['comment']) || isset($tags['COMMENT'])) {
+                $extracted_metadata['Comment'] = $tags['comment'] ?? $tags['COMMENT'];
+            }
+        }
+        
+        // Extract stream metadata (audio streams)
+        if (isset($metadata['streams']) && is_array($metadata['streams'])) {
+            foreach ($metadata['streams'] as $stream) {
+                if ($stream['codec_type'] === 'audio') {
+                    // Audio stream information
+                    if (isset($stream['codec_name'])) {
+                        $extracted_metadata['Audio Codec'] = strtoupper($stream['codec_name']);
+                    }
+                    if (isset($stream['bit_rate'])) {
+                        $extracted_metadata['Bitrate'] = round($stream['bit_rate'] / 1000) . ' kbps';
+                    }
+                    if (isset($stream['sample_rate'])) {
+                        $extracted_metadata['Sample Rate'] = number_format($stream['sample_rate']) . ' Hz';
+                    }
+                    if (isset($stream['channels'])) {
+                        $channels = $stream['channels'];
+                        $channel_text = $channels == 1 ? 'Mono' : ($channels == 2 ? 'Stereo' : $channels . ' channels');
+                        $extracted_metadata['Channels'] = $channel_text;
+                    }
+                    if (isset($stream['duration'])) {
+                        $duration = (float)$stream['duration'];
+                        $extracted_metadata['Duration'] = gmdate('H:i:s', $duration);
+                    }
+                    
+                    // Bits per sample
+                    if (isset($stream['bits_per_raw_sample'])) {
+                        $extracted_metadata['Bit Depth'] = $stream['bits_per_raw_sample'] . ' bit';
+                    }
+                    break; // Take first audio stream
                 }
             }
         }
@@ -720,6 +975,28 @@ class GalleryConfig {
             },
             'type_avi' => function($file) {
                 return strpos($file['path'], '.avi') !== false;
+            },
+            'type_audio' => function($file) {
+                return strpos($file['path'], '.mp3') !== false || 
+                       strpos($file['path'], '.opus') !== false ||
+                       strpos($file['path'], '.wav') !== false ||
+                       strpos($file['path'], '.flac') !== false ||
+                       strpos($file['path'], '.aac') !== false;
+            },
+            'type_mp3' => function($file) {
+                return strpos($file['path'], '.mp3') !== false;
+            },
+            'type_opus' => function($file) {
+                return strpos($file['path'], '.opus') !== false;
+            },
+            'type_wav' => function($file) {
+                return strpos($file['path'], '.wav') !== false;
+            },
+            'type_flac' => function($file) {
+                return strpos($file['path'], '.flac') !== false;
+            },
+            'type_aac' => function($file) {
+                return strpos($file['path'], '.aac') !== false;
             }
         ];
     }
@@ -1081,6 +1358,23 @@ function get_media_files($dir) {
                     $exif = null;
                     error_log("No video metadata found for {$filename}");
                 }
+            } else if (GalleryConfig::isAudio($filename)) {
+                // Use centralized audio MIME type detection
+                $type = GalleryConfig::getAudioMimeType($filename);
+                
+                // Extract comprehensive metadata from audio using centralized method
+                $audio_metadata = GalleryConfig::getAudioMetadata($path);
+                if ($audio_metadata) {
+                    $taken = $audio_metadata['creation_date'] ?: 0;
+                    $exif = $audio_metadata['metadata'];
+                    
+                    // Debug: Log audio metadata extraction
+                    error_log("Audio metadata for {$filename}: " . print_r($audio_metadata, true));
+                } else {
+                    $taken = 0;
+                    $exif = null;
+                    error_log("No audio metadata found for {$filename}");
+                }
             }
             
             // If no taken date found, use modification time
@@ -1239,6 +1533,7 @@ foreach ($paginated_files as $file) {
     // Use centralized detection and thumbnail path generation
     $is_video = GalleryConfig::isVideo($file['path']);
     $is_image = GalleryConfig::isImage($file['path']);
+    $is_audio = GalleryConfig::isAudio($file['path']);
     $is_pdf = GalleryConfig::isPDF($file['path']);
     
     // Skip PDFs - they'll be handled entirely by JavaScript
@@ -1248,6 +1543,8 @@ foreach ($paginated_files as $file) {
     
     if ($is_video) {
         $thumb_path = GalleryConfig::getVideoThumbnailPath($file['path'], $thumbs_dir);
+    } else if ($is_audio) {
+        $thumb_path = GalleryConfig::getAudioThumbnailPath($file['path'], $thumbs_dir);
     } else if ($is_image) {
         $thumb_path = GalleryConfig::getImageThumbnailPath($file['path'], $thumbs_dir);
     } else {
@@ -1268,6 +1565,8 @@ foreach ($paginated_files as $file) {
     // Handle different file types
     if ($is_video) {
         GalleryConfig::createVideoThumbnail($file['path'], $thumb_path);
+    } else if ($is_audio) {
+        GalleryConfig::createAudioThumbnail($file['path'], $thumb_path, $thumb_width);
     } else if ($is_image) {
         // Use centralized image thumbnail creation
         $success = GalleryConfig::createImageThumbnail($file['path'], $thumb_path, $thumb_width);
@@ -1526,6 +1825,48 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             font-size: 50px;
             opacity: 0.8;
             pointer-events: none;
+        }
+
+        /* Audio play button - only visible on hover */
+        .audio-play-button-hover {
+            position: absolute;
+            top: 35%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(46, 204, 113, 0.9);
+            color: white;
+            border-radius: 50%;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            opacity: 0;
+            transition: all 0.3s ease;
+            pointer-events: auto;
+            backdrop-filter: blur(4px);
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+            cursor: pointer;
+            z-index: 10;
+        }
+
+        .item:hover .audio-play-button-hover {
+            opacity: 1;
+            transform: translate(-50%, -50%) scale(1.05);
+        }
+
+        .item[data-audio-playing="true"] .audio-play-button-hover {
+            background: rgba(231, 76, 60, 0.9);
+            opacity: 1;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: translate(-50%, -50%) scale(1); }
+            50% { transform: translate(-50%, -50%) scale(1.05); }
+            100% { transform: translate(-50%, -50%) scale(1); }
         }
 
         .pdf-thumbnail {
@@ -2030,6 +2371,153 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 font-size: 12px;
             }
         }
+
+        /* Audio Player Styles */
+        .audio-player {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(135deg, #2d2f36, #1e1f23);
+            border-top: 2px solid #1db954;
+            padding: 15px 20px;
+            z-index: 1000;
+            transform: translateY(100%);
+            transition: transform 0.3s ease;
+            box-shadow: 0 -4px 20px rgba(0,0,0,0.3);
+        }
+
+        .audio-player.active {
+            transform: translateY(0);
+        }
+
+        .audio-controls {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .audio-btn {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 18px;
+            cursor: pointer;
+            padding: 8px;
+            border-radius: 50%;
+            transition: background 0.2s;
+            min-width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .audio-btn:hover {
+            background: rgba(255,255,255,0.1);
+        }
+
+        #audioPlayPause {
+            background: #1db954;
+            font-size: 20px;
+        }
+
+        #audioPlayPause:hover {
+            background: #1ed760;
+        }
+
+        .audio-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        #audioTitle {
+            color: white;
+            font-weight: bold;
+            margin-bottom: 5px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .audio-progress-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .audio-progress {
+            flex: 1;
+            height: 6px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 3px;
+            cursor: pointer;
+            position: relative;
+        }
+
+        .audio-progress-bar {
+            height: 100%;
+            background: #1db954;
+            border-radius: 3px;
+            width: 0%;
+            transition: width 0.1s;
+        }
+
+        .audio-time {
+            color: #b3b3b3;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        .audio-volume {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .volume-slider {
+            width: 80px;
+            height: 6px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 3px;
+            outline: none;
+            cursor: pointer;
+        }
+
+        .volume-slider::-webkit-slider-thumb {
+            appearance: none;
+            width: 14px;
+            height: 14px;
+            background: #1db954;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        .volume-slider::-moz-range-thumb {
+            width: 14px;
+            height: 14px;
+            background: #1db954;
+            border-radius: 50%;
+            cursor: pointer;
+            border: none;
+        }
+
+        @media (max-width: 700px) {
+            .audio-controls {
+                gap: 10px;
+                padding: 0;
+            }
+            
+            .audio-volume {
+                display: none;
+            }
+            
+            .audio-time {
+                font-size: 10px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -2094,6 +2582,7 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                     <optgroup label="By Category">
                         <option value="type_image" <?= $filter_type == 'type_image' ? 'selected' : '' ?>>All Images</option>
                         <option value="type_video" <?= $filter_type == 'type_video' ? 'selected' : '' ?>>All Videos</option>
+                        <option value="type_audio" <?= $filter_type == 'type_audio' ? 'selected' : '' ?>>All Audio</option>
                         <option value="type_pdf" <?= $filter_type == 'type_pdf' ? 'selected' : '' ?>>PDF Documents</option>
                     </optgroup>
                     <optgroup label="Image Formats">
@@ -2111,6 +2600,13 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                         <option value="type_3gp" <?= $filter_type == 'type_3gp' ? 'selected' : '' ?>>3GP Videos</option>
                         <option value="type_mov" <?= $filter_type == 'type_mov' ? 'selected' : '' ?>>QuickTime Videos</option>
                         <option value="type_avi" <?= $filter_type == 'type_avi' ? 'selected' : '' ?>>AVI Videos</option>
+                    </optgroup>
+                    <optgroup label="Audio Formats">
+                        <option value="type_mp3" <?= $filter_type == 'type_mp3' ? 'selected' : '' ?>>MP3 Audio</option>
+                        <option value="type_opus" <?= $filter_type == 'type_opus' ? 'selected' : '' ?>>Opus Audio</option>
+                        <option value="type_wav" <?= $filter_type == 'type_wav' ? 'selected' : '' ?>>WAV Audio</option>
+                        <option value="type_flac" <?= $filter_type == 'type_flac' ? 'selected' : '' ?>>FLAC Audio</option>
+                        <option value="type_aac" <?= $filter_type == 'type_aac' ? 'selected' : '' ?>>AAC Audio</option>
                     </optgroup>
                 </select>
             </div>
@@ -2232,6 +2728,7 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                             switch ($filter_type) {
                                 case 'type_image': $type_label = 'Images'; break;
                                 case 'type_video': $type_label = 'Videos'; break;
+                                case 'type_audio': $type_label = 'Audio Files'; break;
                                 case 'type_pdf': $type_label = 'PDF Documents'; break;
                                 case 'type_jpg': $type_label = 'JPEG Images'; break;
                                 case 'type_png': $type_label = 'PNG Images'; break;
@@ -2245,6 +2742,11 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                                 case 'type_3gp': $type_label = '3GP Videos'; break;
                                 case 'type_mov': $type_label = 'QuickTime Videos'; break;
                                 case 'type_avi': $type_label = 'AVI Videos'; break;
+                                case 'type_mp3': $type_label = 'MP3 Audio'; break;
+                                case 'type_opus': $type_label = 'Opus Audio'; break;
+                                case 'type_wav': $type_label = 'WAV Audio'; break;
+                                case 'type_flac': $type_label = 'FLAC Audio'; break;
+                                case 'type_aac': $type_label = 'AAC Audio'; break;
                             }
                             echo $type_label . ' - ' . date('l, F j, Y', strtotime($group_name));
                             ?>
@@ -2258,10 +2760,16 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                             $json_data = json_encode($file);
                             if ($json_data !== false && $json_data !== null):
                         ?>
-                        <div class="item" data-index="<?= $global_index++ ?>" onclick="openViewer(<?= $global_index - 1 ?>, '<?= addslashes($file['path']) ?>', '<?= $is_video ? 'video' : (GalleryConfig::isPDF($file['path']) ? 'pdf' : 'image') ?>')">
+                        <div class="item" data-index="<?= $global_index++ ?>" 
+                             <?php 
+                             $is_video = GalleryConfig::isVideo($file['path']);
+                             $is_audio = GalleryConfig::isAudio($file['path']);
+                             $is_pdf = GalleryConfig::isPDF($file['path']);
+                             
+                             if (!$is_audio): ?>
+                                 onclick="openViewer(<?= $global_index - 1 ?>, '<?= addslashes($file['path']) ?>', '<?= $is_video ? 'video' : ($is_pdf ? 'pdf' : 'image') ?>')"
+                             <?php endif; ?>>
                             <?php 
-                            $is_video = GalleryConfig::isVideo($file['path']);
-                            $is_pdf = GalleryConfig::isPDF($file['path']);
                             if ($is_video): 
                                 $video_thumb_path = GalleryConfig::getVideoThumbnailPath($file['path'], $thumbs_dir);
                             ?>
@@ -2270,6 +2778,16 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                                     alt="<?= htmlspecialchars(basename($file['path'])) ?>"
                                     loading="lazy">
                                 <div class="play-button">▶</div>
+                            <?php elseif ($is_audio): 
+                                $audio_thumb_path = GalleryConfig::getAudioThumbnailPath($file['path'], $thumbs_dir);
+                                $audio_metadata = GalleryConfig::getAudioMetadata($file['path']);
+                            ?>
+                                <!-- Audio thumbnail with hover play functionality -->
+                                <img src="<?= $thumbs_dir . '/' . rawurlencode(basename($audio_thumb_path)) ?>" 
+                                    alt="<?= htmlspecialchars(basename($file['path'])) ?>"
+                                    loading="lazy">
+                                <div class="audio-play-button-hover" 
+                                     onclick="event.stopPropagation(); playAudio('<?= addslashes($file['path']) ?>', '<?= addslashes($file['name']) ?>')">▶</div>
                             <?php elseif ($is_pdf): ?>
                                 <!-- PDF thumbnail will be generated by JavaScript -->
                                 <canvas class="pdf-thumbnail" 
@@ -2287,8 +2805,17 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                             <div class="info">
                                 <div class="info-filename"><?= htmlspecialchars($file['name']) ?></div>
                                 <div style="font-size: 0.8em; margin-top: 3px;">
-                                    Size: <?= GalleryUtils::formatFileSize($file['size']) ?><br>
-                                    Taken: <?= date('M j, Y H:i', $file['taken']) ?>
+                                    <?php if ($is_audio): ?>
+                                        Size: <?= GalleryUtils::formatFileSize($file['size']) ?><br>
+                                        <?php if ($audio_metadata && isset($audio_metadata['metadata']['Duration'])): ?>
+                                            Duration: <?= htmlspecialchars($audio_metadata['metadata']['Duration']) ?>
+                                        <?php else: ?>
+                                            Audio File
+                                        <?php endif; ?>
+                                    <?php else: ?>
+                                        Size: <?= GalleryUtils::formatFileSize($file['size']) ?><br>
+                                        Taken: <?= date('M j, Y H:i', $file['taken']) ?>
+                                    <?php endif; ?>
                                 </div>
                             </div>
                         </div>
@@ -2338,6 +2865,30 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
         <button class="lightbox-prev">&lsaquo;</button>
         <button class="lightbox-next">&rsaquo;</button>
         <div class="lightbox-content" id="lightbox-content"></div>
+    </div>
+
+    <!-- Audio Player -->
+    <div id="audioPlayer" class="audio-player">
+        <div class="audio-controls">
+            <button id="audioPlayPause" class="audio-btn">▶</button>
+            <div class="audio-info">
+                <div id="audioTitle">No audio selected</div>
+                <div class="audio-progress-container">
+                    <div id="audioProgress" class="audio-progress">
+                        <div id="audioProgressBar" class="audio-progress-bar"></div>
+                    </div>
+                    <div class="audio-time">
+                        <span id="currentTime">0:00</span> / <span id="totalTime">0:00</span>
+                    </div>
+                </div>
+            </div>
+            <div class="audio-volume">
+                <button id="audioMute" class="audio-btn">🔊</button>
+                <input type="range" id="volumeSlider" min="0" max="100" value="100" class="volume-slider">
+            </div>
+            <button id="audioClose" class="audio-btn">✕</button>
+        </div>
+        <audio id="audioElement" preload="none"></audio>
     </div>
 
     <script>
@@ -3268,6 +3819,202 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                     console.warn('Failed to generate PDF thumbnail:', error);
                 }
             }
+        }
+
+        // Audio Player Management
+        class AudioPlayer {
+            constructor() {
+                this.player = document.getElementById('audioPlayer');
+                this.audioElement = document.getElementById('audioElement');
+                this.playPauseBtn = document.getElementById('audioPlayPause');
+                this.titleElement = document.getElementById('audioTitle');
+                this.progressBar = document.getElementById('audioProgressBar');
+                this.progressContainer = document.getElementById('audioProgress');
+                this.currentTimeElement = document.getElementById('currentTime');
+                this.totalTimeElement = document.getElementById('totalTime');
+                this.muteBtn = document.getElementById('audioMute');
+                this.volumeSlider = document.getElementById('volumeSlider');
+                this.closeBtn = document.getElementById('audioClose');
+                
+                this.currentAudioPath = null;
+                this.currentAudioTitle = null;
+                this.isPlaying = false;
+                
+                this.init();
+            }
+            
+            init() {
+                // Audio element events
+                this.audioElement.addEventListener('loadedmetadata', () => {
+                    this.updateTotalTime();
+                });
+                
+                this.audioElement.addEventListener('timeupdate', () => {
+                    this.updateProgress();
+                });
+                
+                this.audioElement.addEventListener('ended', () => {
+                    this.pause();
+                });
+                
+                // Control events
+                this.playPauseBtn.addEventListener('click', () => {
+                    this.togglePlayPause();
+                });
+                
+                this.progressContainer.addEventListener('click', (e) => {
+                    this.seekTo(e);
+                });
+                
+                this.muteBtn.addEventListener('click', () => {
+                    this.toggleMute();
+                });
+                
+                this.volumeSlider.addEventListener('input', (e) => {
+                    this.setVolume(e.target.value / 100);
+                });
+                
+                this.closeBtn.addEventListener('click', () => {
+                    this.close();
+                });
+            }
+            
+            load(audioPath, title) {
+                this.currentAudioPath = audioPath;
+                this.currentAudioTitle = title;
+                
+                // Update UI
+                this.titleElement.textContent = title;
+                this.audioElement.src = audioPath;
+                
+                // Show player
+                this.show();
+                
+                // Clear previous audio indicators
+                this.clearAudioIndicators();
+                
+                console.log('Loading audio:', audioPath);
+            }
+            
+            show() {
+                this.player.classList.add('active');
+            }
+            
+            hide() {
+                this.player.classList.remove('active');
+            }
+            
+            close() {
+                this.pause();
+                this.hide();
+                this.clearAudioIndicators();
+                this.currentAudioPath = null;
+                this.currentAudioTitle = null;
+                this.titleElement.textContent = 'No audio selected';
+            }
+            
+            play() {
+                this.audioElement.play().then(() => {
+                    this.isPlaying = true;
+                    this.playPauseBtn.textContent = '⏸';
+                    this.updateAudioIndicators();
+                }).catch(error => {
+                    console.error('Error playing audio:', error);
+                });
+            }
+            
+            pause() {
+                this.audioElement.pause();
+                this.isPlaying = false;
+                this.playPauseBtn.textContent = '▶';
+                this.clearAudioIndicators();
+            }
+            
+            togglePlayPause() {
+                if (this.isPlaying) {
+                    this.pause();
+                } else {
+                    this.play();
+                }
+            }
+            
+            updateProgress() {
+                if (this.audioElement.duration) {
+                    const progress = (this.audioElement.currentTime / this.audioElement.duration) * 100;
+                    this.progressBar.style.width = progress + '%';
+                    this.currentTimeElement.textContent = this.formatTime(this.audioElement.currentTime);
+                }
+            }
+            
+            updateTotalTime() {
+                if (this.audioElement.duration) {
+                    this.totalTimeElement.textContent = this.formatTime(this.audioElement.duration);
+                }
+            }
+            
+            seekTo(event) {
+                const rect = this.progressContainer.getBoundingClientRect();
+                const percent = (event.clientX - rect.left) / rect.width;
+                const time = percent * this.audioElement.duration;
+                this.audioElement.currentTime = time;
+            }
+            
+            toggleMute() {
+                if (this.audioElement.muted) {
+                    this.audioElement.muted = false;
+                    this.muteBtn.textContent = '🔊';
+                    this.volumeSlider.value = this.audioElement.volume * 100;
+                } else {
+                    this.audioElement.muted = true;
+                    this.muteBtn.textContent = '🔇';
+                }
+            }
+            
+            setVolume(volume) {
+                this.audioElement.volume = volume;
+                this.audioElement.muted = false;
+                this.muteBtn.textContent = volume > 0 ? '🔊' : '🔇';
+            }
+            
+            formatTime(seconds) {
+                const minutes = Math.floor(seconds / 60);
+                const remainingSeconds = Math.floor(seconds % 60);
+                return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+            }
+            
+            updateAudioIndicators() {
+                // Find the current audio item and mark it as playing
+                const audioItems = document.querySelectorAll('.item');
+                audioItems.forEach(item => {
+                    const audioPath = this.getAudioPathFromOnclick(item.getAttribute('onclick'));
+                    if (audioPath === this.currentAudioPath) {
+                        item.setAttribute('data-audio-playing', 'true');
+                    }
+                });
+            }
+            
+            clearAudioIndicators() {
+                // Clear all audio playing indicators
+                const audioItems = document.querySelectorAll('.item[data-audio-playing="true"]');
+                audioItems.forEach(item => {
+                    item.removeAttribute('data-audio-playing');
+                });
+            }
+            
+            getAudioPathFromOnclick(onclickStr) {
+                if (!onclickStr) return null;
+                const match = onclickStr.match(/playAudio\(['"]([^'"]+)['"]/);
+                return match ? match[1] : null;
+            }
+        }
+
+        // Global audio player instance
+        window.audioPlayer = new AudioPlayer();
+
+        // Global function to play audio (called from HTML onclick)
+        function playAudio(audioPath, title) {
+            window.audioPlayer.load(audioPath, title);
+            window.audioPlayer.play();
         }
 
         // Initialize gallery when DOM is ready
