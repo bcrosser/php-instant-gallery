@@ -7,14 +7,17 @@ The idea here is that all you need to do is point this at a directory and it wil
 It's still a work in progress, and I'll add more documentation once I have productionalized the thing.
 
 ## Features
-- Supports jpg,jpeg,png,gif,mp4,webm file types.
-- Visiting gallery autogenerates thumbnails for all images and videos in gallery directory.
-- Resizeable thumbnail size reorders images.
-- Sort media Ascending/Descending by: modified date, date taken, size, name.
-- Filter Media by file type and grouping.
-- Lightbox viewer with button, arrow key and touch navigation.
-- Integrated video player.
-- Shows image and video metadata (including GPS data with Google Maps link integrated).
+- Supports image file formats (jpg,jpeg,png,gif,webp,bmp,ico,apng)
+- Supports video file formats (mp4,webm,ogg,ogv,3gp,qt,mov,qtff,avi)
+- Supports audio file formats (mp3,opus,wav,flac,aac)
+- Integrated video and audio player
+- Integrated PDF viewer
+- Visiting gallery autogenerates thumbnails for all images, videos, audio and PDF in gallery directory
+- Resizeable thumbnail size reorders images
+- Sort media Ascending/Descending by: modified date, date taken, size, name
+- Filter Media by file type and grouping
+- Lightbox viewer with button, arrow key and touch navigation
+- Shows image and video metadata (including GPS data with Google Maps link integrated)
 
 ## Screenshots
 
@@ -41,6 +44,7 @@ Done!
 
 ## Requirements:
 * [PHP 5.2=>](https://www.php.net/)
-* [Enable GD-support in PHP](https://www.php.net/manual/en/image.installation.php)
-* [ffmpeg](https://ffmpeg.org/) (in path)
-* [ffprobe](https://ffmpeg.org/ffprobe.html) (in path)
+* [Enable GD-support in PHP](https://www.php.net/manual/en/image.installation.php) (enable via php.ini)
+* [ffmpeg](https://ffmpeg.org/) (install and put in system path or use path directly)
+* [ffprobe](https://ffmpeg.org/ffprobe.html) (install and put in system path or use path directly)
+* [PDF.js](https://mozilla.github.io/pdf.js/) (already added, no need to do anything)
