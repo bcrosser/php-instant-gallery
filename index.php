@@ -24,9 +24,9 @@ $external_links = [
 // Constants and configuration arrays
 class GalleryConfig {
     // Supported file extensions
-    const SUPPORTED_EXTENSIONS = '/\.(jpg|jpeg|gif|png|mp4|webm)$/i';
+    const SUPPORTED_EXTENSIONS = '/\.(jpg|jpeg|gif|png|mp4|webm|ogg|ogv|3gp|qt|mov|qtff|avi)$/i';
     const IMAGE_EXTENSIONS = '/\.(jpg|gif|jpeg|png)$/i';
-    const VIDEO_EXTENSIONS = '/\.(mp4|webm)$/i';
+    const VIDEO_EXTENSIONS = '/\.(mp4|webm|ogg|ogv|3gp|qt|mov|qtff|avi)$/i';
     
     // Video utilities
     public static function isVideo($filename) {
@@ -38,6 +38,14 @@ class GalleryConfig {
             return 'video/mp4';
         } else if (preg_match('/\.webm$/i', $filename)) {
             return 'video/webm';
+        } else if (preg_match('/\.(ogg|ogv)$/i', $filename)) {
+            return 'video/ogg';
+        } else if (preg_match('/\.3gp$/i', $filename)) {
+            return 'video/3gpp';
+        } else if (preg_match('/\.(qt|mov|qtff)$/i', $filename)) {
+            return 'video/quicktime';
+        } else if (preg_match('/\.avi$/i', $filename)) {
+            return 'video/x-msvideo';
         } else {
             return 'video/mp4'; // Default fallback
         }
@@ -388,7 +396,14 @@ class GalleryConfig {
             },
             'type_video' => function($file) {
                 return strpos($file['path'], '.mp4') !== false || 
-                       strpos($file['path'], '.webm') !== false;
+                       strpos($file['path'], '.webm') !== false ||
+                       strpos($file['path'], '.ogg') !== false ||
+                       strpos($file['path'], '.ogv') !== false ||
+                       strpos($file['path'], '.3gp') !== false ||
+                       strpos($file['path'], '.qt') !== false ||
+                       strpos($file['path'], '.mov') !== false ||
+                       strpos($file['path'], '.qtff') !== false ||
+                       strpos($file['path'], '.avi') !== false;
             },
             'type_gif' => function($file) {
                 return strpos($file['path'], '.gif') !== false;
@@ -405,6 +420,21 @@ class GalleryConfig {
             },
             'type_webm' => function($file) {
                 return strpos($file['path'], '.webm') !== false;
+            },
+            'type_ogg' => function($file) {
+                return strpos($file['path'], '.ogg') !== false ||
+                       strpos($file['path'], '.ogv') !== false;
+            },
+            'type_3gp' => function($file) {
+                return strpos($file['path'], '.3gp') !== false;
+            },
+            'type_mov' => function($file) {
+                return strpos($file['path'], '.qt') !== false ||
+                       strpos($file['path'], '.mov') !== false ||
+                       strpos($file['path'], '.qtff') !== false;
+            },
+            'type_avi' => function($file) {
+                return strpos($file['path'], '.avi') !== false;
             }
         ];
     }
