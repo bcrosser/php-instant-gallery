@@ -23,6 +23,79 @@ class GalleryConfig {
     const IMAGE_EXTENSIONS = '/\.(jpg|gif|jpeg|png)$/i';
     const VIDEO_EXTENSIONS = '/\.(mp4|webm)$/i';
     
+    // Video utilities
+    public static function isVideo($filename) {
+        return preg_match(self::VIDEO_EXTENSIONS, $filename);
+    }
+    
+    public static function getVideoMimeType($filename) {
+        if (preg_match('/\.mp4$/i', $filename)) {
+            return 'video/mp4';
+        } else if (preg_match('/\.webm$/i', $filename)) {
+            return 'video/webm';
+        } else {
+            return 'video/mp4'; // Default fallback
+        }
+    }
+    
+    public static function getVideoThumbnailPath($video_path, $thumbs_dir) {
+        return $thumbs_dir . '/' . basename($video_path) . '.jpg';
+    }
+    
+    public static function createVideoThumbnail($source, $destination) {
+        global $thumb_width;
+        $thumb_height = $thumb_width; // Default square, will be adjusted if needed
+        
+        // Extract a single frame at 1 second mark and save as JPEG
+        $command = "ffmpeg -i \"{$source}\" -ss 00:00:01 -vframes 1 -s {$thumb_width}x{$thumb_height} -f image2 \"{$destination}\"";
+        exec($command);
+        
+        // Check if thumbnail was created, if not try again with different timestamp
+        if (!file_exists($destination) || filesize($destination) == 0) {
+            $command = "ffmpeg -i \"{$source}\" -ss 00:00:10 -vframes 1 -s {$thumb_width}x{$thumb_height} -f image2 \"{$destination}\"";
+            exec($command);
+        }
+        
+        // If still fails, create an empty placeholder
+        if (!file_exists($destination) || filesize($destination) == 0) {
+            // Create a black placeholder with text
+            $img = imagecreatetruecolor($thumb_width, $thumb_height);
+            $text_color = imagecolorallocate($img, 255, 255, 255);
+            $bg_color = imagecolorallocate($img, 0, 0, 0);
+            imagefilledrectangle($img, 0, 0, $thumb_width, $thumb_height, $bg_color);
+            imagestring($img, 3, $thumb_width/4, $thumb_height/2, "Video", $text_color);
+            imagejpeg($img, $destination, 90);
+            imagedestroy($img);
+        }
+    }
+    
+    public static function getVideoCreationDate($video_path) {
+        $command = "ffprobe -v quiet -print_format json -show_format \"{$video_path}\"";
+        $output = shell_exec($command);
+        $metadata = json_decode($output, true);
+        
+        // Check various metadata fields that might contain creation date
+        if (!empty($metadata) && isset($metadata['format']) && isset($metadata['format']['tags'])) {
+            $tags = $metadata['format']['tags'];
+            
+            // Try different possible tag names for creation date
+            $date_keys = ['creation_time', 'date', 'DateTimeOriginal', 'com.apple.quicktime.creationdate'];
+            
+            foreach ($date_keys as $key) {
+                if (isset($tags[$key])) {
+                    // Try to parse the date in various formats
+                    $date = strtotime($tags[$key]);
+                    if ($date !== false) {
+                        return $date;
+                    }
+                }
+            }
+        }
+        
+        // If no valid date found in metadata, fall back to file modification time
+        return filemtime($video_path);
+    }
+    
     // Size ranges for grouping files
     public static function getSizeRanges() {
         return [
@@ -227,34 +300,6 @@ function create_thumbnail($source, $destination, $width) {
     imagedestroy($img);
 }
 
-// Function to extract creation date from video metadata using FFmpeg
-function get_video_creation_date($video_path) {
-    $command = "ffprobe -v quiet -print_format json -show_format \"{$video_path}\"";
-    $output = shell_exec($command);
-    $metadata = json_decode($output, true);
-    
-    // Check various metadata fields that might contain creation date
-    if (!empty($metadata) && isset($metadata['format']) && isset($metadata['format']['tags'])) {
-        $tags = $metadata['format']['tags'];
-        
-        // Try different possible tag names for creation date
-        $date_keys = ['creation_time', 'date', 'DateTimeOriginal', 'com.apple.quicktime.creationdate'];
-        
-        foreach ($date_keys as $key) {
-            if (isset($tags[$key])) {
-                // Try to parse the date in various formats
-                $date = strtotime($tags[$key]);
-                if ($date !== false) {
-                    return $date;
-                }
-            }
-        }
-    }
-    
-    // If no valid date found in metadata, fall back to file modification time
-    return filemtime($video_path);
-}
-
 function gps2Num($coordPart) {
     $parts = explode('/', $coordPart);
     return count($parts) > 1 ? floatval($parts[0]) / floatval($parts[1]) : floatval($parts[0]);
@@ -407,18 +452,12 @@ function get_media_files($dir) {
                     // Silently handle EXIF errors
                     $exif = null;
                 }
-            } else if (preg_match(GalleryConfig::VIDEO_EXTENSIONS, $filename)) {
-                // Set video type with more specific MIME types for better browser compatibility
-                if (preg_match('/\.mp4$/i', $filename)) {
-                    $type = 'video/mp4';
-                } else if (preg_match('/\.webm$/i', $filename)) {
-                    $type = 'video/webm';
-                } else {
-                    $type = 'video/mp4'; // Default fallback
-                }
+            } else if (GalleryConfig::isVideo($filename)) {
+                // Use centralized video MIME type detection
+                $type = GalleryConfig::getVideoMimeType($filename);
                 
-                // Extract creation date from video metadata
-                $taken = get_video_creation_date($path);
+                // Extract creation date from video metadata using centralized method
+                $taken = GalleryConfig::getVideoCreationDate($path);
             }
             
             // If no taken date found, use modification time
@@ -439,35 +478,6 @@ function get_media_files($dir) {
     }
     
     return $files;
-}
-
-// Function to create video thumbnails - fixed to extract a static image
-function create_video_thumbnail($source, $destination) {
-    // Calculate thumbnail dimensions (maintain aspect ratio)
-    global $thumb_width;
-    $thumb_height = $thumb_width; // Default square, will be adjusted if needed
-    
-    // Extract a single frame at 1 second mark and save as JPEG
-    $command = "ffmpeg -i \"{$source}\" -ss 00:00:01 -vframes 1 -s {$thumb_width}x{$thumb_height} -f image2 \"{$destination}\"";
-    exec($command);
-    
-    // Check if thumbnail was created, if not try again with different timestamp
-    if (!file_exists($destination) || filesize($destination) == 0) {
-        $command = "ffmpeg -i \"{$source}\" -ss 00:00:10 -vframes 1 -s {$thumb_width}x{$thumb_height} -f image2 \"{$destination}\"";
-        exec($command);
-    }
-    
-    // If still fails, create an empty placeholder
-    if (!file_exists($destination) || filesize($destination) == 0) {
-        // Create a black placeholder with text
-        $img = imagecreatetruecolor($thumb_width, $thumb_height);
-        $text_color = imagecolorallocate($img, 255, 255, 255);
-        $bg_color = imagecolorallocate($img, 0, 0, 0);
-        imagefilledrectangle($img, 0, 0, $thumb_width, $thumb_height, $bg_color);
-        imagestring($img, 3, $thumb_width/4, $thumb_height/2, "Video", $text_color);
-        imagejpeg($img, $destination, 90);
-        imagedestroy($img);
-    }
 }
 
 // Main logic
@@ -597,11 +607,11 @@ if ($actual_sort == 'name_asc' || $actual_sort == 'name_desc') {
 
 // Generate thumbnails for each media file
 foreach ($paginated_files as $file) {
-    // Create thumbnail path - videos need .jpg extension
-    $is_video = preg_match(GalleryConfig::VIDEO_EXTENSIONS, $file['path']);
+    // Use centralized video detection and thumbnail path generation
+    $is_video = GalleryConfig::isVideo($file['path']);
     
     if ($is_video) {
-        $thumb_path = $thumbs_dir . '/' . basename($file['path']) . '.jpg';
+        $thumb_path = GalleryConfig::getVideoThumbnailPath($file['path'], $thumbs_dir);
     } else {
         $thumb_path = $thumbs_dir . '/' . basename($file['path']);
     }
@@ -611,7 +621,7 @@ foreach ($paginated_files as $file) {
     
     // Handle different file types
     if ($is_video) {
-        create_video_thumbnail($file['path'], $thumb_path);
+        GalleryConfig::createVideoThumbnail($file['path'], $thumb_path);
     } else {
         // Handle image files
         switch ($file['type']) {
@@ -1510,11 +1520,12 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                         ?>
                         <div class="item" data-index="<?= $global_index++ ?>">
                             <?php 
-                            $is_video = preg_match(GalleryConfig::VIDEO_EXTENSIONS, $file['path']);
+                            $is_video = GalleryConfig::isVideo($file['path']);
                             if ($is_video): 
+                                $video_thumb_path = GalleryConfig::getVideoThumbnailPath($file['path'], $thumbs_dir);
                             ?>
                                 <!-- Use img for video thumbnails to prevent Firefox from preloading videos -->
-                                <img src="<?= $thumbs_dir . '/' . rawurlencode(basename($file['path'])) . '.jpg' ?>" 
+                                <img src="<?= rawurlencode(basename($video_thumb_path)) ?>" 
                                     alt="<?= htmlspecialchars(basename($file['path'])) ?>"
                                     loading="lazy">
                                 <div class="play-button">▶</div>
@@ -1581,163 +1592,166 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
     </div>
 
     <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            // Create a fixed array of paginated media files for the lightbox
-            const allMediaFiles = [];
-            <?php 
-            $index = 0;
-            foreach ($grouped_files as $group_name => $files): 
-                foreach ($files as $file): 
-                    // Enhance file data with formatted fields for JavaScript
-                    $enhanced_file = $file;
-                    $enhanced_file['formatted_size'] = GalleryUtils::formatFileSize($file['size']);
-                    $enhanced_file['formatted_modified_date'] = date('M j, Y H:i', $file['modified']);
-                    $enhanced_file['formatted_taken_date'] = date('M j, Y H:i', $file['taken']);
-                    
-                    // Rename 'exif' to 'exif_data' for JavaScript consistency
-                    if (isset($file['exif']) && $file['exif']) {
-                        $enhanced_file['exif_data'] = $file['exif'];
-                    }
-                    unset($enhanced_file['exif']); // Remove old field
-                    
-                    // Only include files that can be properly JSON encoded (matching HTML generation logic)
-                    $json_data = json_encode($enhanced_file);
-                    if ($json_data !== false && $json_data !== null):
-            ?>
-                allMediaFiles[<?= $index++ ?>] = <?= $json_data ?>;
-            <?php 
-                    endif;
-                endforeach; 
-            endforeach; 
-            ?>
-            
-            // Set the selected option based on the current URL parameter
-            const urlParams = new URLSearchParams(window.location.search);
-            const sortBy = urlParams.get('sort');
-            if (sortBy) {
-                // Handle sorting options
-                if (sortBy.startsWith('modified_') || sortBy.startsWith('taken_') || 
-                    sortBy.startsWith('name_') || sortBy === 'size_') {
-                    document.getElementById('sortBy').value = sortBy;
-                }
+        // Gallery Management Class - Centralized JavaScript functionality
+        class InstantGallery {
+            constructor() {
+                this.allMediaFiles = [];
+                this.currentIndex = 0;
+                this.exifToggleExpanded = false;
+                this.lightbox = null;
+                this.lightboxContent = null;
+                this.items = null;
                 
-                // Handle filter options
-                if (sortBy.startsWith('type_')) {
-                    document.getElementById('filterBy').value = sortBy;
+                this.init();
+            }
+            
+            init() {
+                this.loadMediaFiles();
+                this.initializeElements();
+                this.setupEventListeners();
+                this.setupURLParameters();
+                this.setupThumbnailSizeControl();
+            }
+            
+            // Media file loading
+            loadMediaFiles() {
+                <?php 
+                $index = 0;
+                foreach ($grouped_files as $group_name => $files): 
+                    foreach ($files as $file): 
+                        // Enhance file data with formatted fields for JavaScript
+                        $enhanced_file = $file;
+                        $enhanced_file['formatted_size'] = GalleryUtils::formatFileSize($file['size']);
+                        $enhanced_file['formatted_modified_date'] = date('M j, Y H:i', $file['modified']);
+                        $enhanced_file['formatted_taken_date'] = date('M j, Y H:i', $file['taken']);
+                        
+                        // Rename 'exif' to 'exif_data' for JavaScript consistency
+                        if (isset($file['exif']) && $file['exif']) {
+                            $enhanced_file['exif_data'] = $file['exif'];
+                        }
+                        unset($enhanced_file['exif']); // Remove old field
+                        
+                        // Only include files that can be properly JSON encoded (matching HTML generation logic)
+                        $json_data = json_encode($enhanced_file);
+                        if ($json_data !== false && $json_data !== null):
+                ?>
+                    this.allMediaFiles[<?= $index++ ?>] = <?= $json_data ?>;
+                <?php 
+                        endif;
+                    endforeach; 
+                endforeach; 
+                ?>
+            }
+            
+            // Initialize DOM elements
+            initializeElements() {
+                this.lightbox = document.getElementById('lightbox');
+                this.lightboxContent = document.getElementById('lightbox-content');
+                this.closeButton = document.querySelector('.close-lightbox');
+                this.prevButton = document.querySelector('.lightbox-prev');
+                this.nextButton = document.querySelector('.lightbox-next');
+                this.items = document.querySelectorAll('.item');
+            }
+            
+            // Setup URL parameters
+            setupURLParameters() {
+                const urlParams = new URLSearchParams(window.location.search);
+                const sortBy = urlParams.get('sort');
+                if (sortBy) {
+                    // Handle sorting options
+                    if (sortBy.startsWith('modified_') || sortBy.startsWith('taken_') || 
+                        sortBy.startsWith('name_') || sortBy === 'size_') {
+                        document.getElementById('sortBy').value = sortBy;
+                    }
+                    
+                    // Handle filter options
+                    if (sortBy.startsWith('type_')) {
+                        document.getElementById('filterBy').value = sortBy;
+                    }
                 }
             }
             
-            // Initialize lightbox
-            const lightbox = document.getElementById('lightbox');
-            const lightboxContent = document.getElementById('lightbox-content');
-            const closeButton = document.querySelector('.close-lightbox');
-            const prevButton = document.querySelector('.lightbox-prev');
-            const nextButton = document.querySelector('.lightbox-next');
-            const items = document.querySelectorAll('.item');
-            
-            let currentIndex = 0;
-            let exifToggleExpanded = false; // Track EXIF toggle state across images
-            
-            // Function to show media at specific index
-            function showMedia(index) {
-                // Make sure index is within bounds
-                if (index < 0) index = allMediaFiles.length - 1;
-                if (index >= allMediaFiles.length) index = 0;
+            // Video handling utilities
+            createVideoElement(file) {
+                const video = document.createElement('video');
+                video.controls = true;
+                video.preload = 'metadata';
+                video.style.maxWidth = '100%';
+                video.style.maxHeight = '85vh';
                 
-                // Update current index
-                currentIndex = index;
+                console.log('Creating video element for:', file.name);
                 
-                // Clear previous content
-                lightboxContent.innerHTML = '';
-                
-                // Get the file to display
-                const file = allMediaFiles[index];
-                console.log('Displaying file:', file.name, 'Type:', file.type, 'Browser:', navigator.userAgent.includes('Firefox') ? 'Firefox' : 'Other');
-                
-                if (file.type && file.type.toString().includes('video')) {
-                    // Create video element for lightbox
-                    const video = document.createElement('video');
-                    video.controls = true;
-                    video.preload = 'metadata'; // Better than autoplay for compatibility
-                    video.style.maxWidth = '100%';
-                    video.style.maxHeight = '85vh';
-                    
-                    console.log('Creating video element for:', file.name);
-                    
-                    // Firefox-specific handling
-                    const isFirefox = navigator.userAgent.includes('Firefox');
-                    if (isFirefox) {
-                        console.log('Firefox detected, applying specific handling');
-                        video.preload = 'auto'; // Firefox sometimes needs this
-                    }
-                    
-                    // Add error handling
-                    video.onerror = function(e) {
-                        console.error('Video failed to load:', file.path, 'Error:', e);
-                        // Create fallback message
-                        const fallback = document.createElement('div');
-                        fallback.style.color = 'white';
-                        fallback.style.textAlign = 'center';
-                        fallback.style.padding = '50px';
-                        fallback.innerHTML = `
-                            <h3>Video could not be loaded</h3>
-                            <p>File: ${file.name}</p>
-                            <p>Type: ${file.type}</p>
-                            <p>Browser: ${isFirefox ? 'Firefox' : 'Other'}</p>
-                            <a href="${source.src}" target="_blank" style="color: #3498db;">Download Video</a>
-                        `;
-                        lightboxContent.innerHTML = '';
-                        lightboxContent.appendChild(fallback);
-                    };
-                    
-                    // Add load event for debugging
-                    video.onloadstart = function() {
-                        console.log('Video load started:', file.name);
-                    };
-                    
-                    video.oncanplay = function() {
-                        console.log('Video can play:', file.name);
-                    };
-                    
-                    const source = document.createElement('source');
-                    // Normalize path separators and construct proper URL
-                    const normalizedPath = file.path.replace(/\\/g, '/');
-                    const pathParts = normalizedPath.split('/');
-                    const encodedFilename = encodeURIComponent(pathParts.pop());
-                    const pathDir = pathParts.join('/');
-                    source.src = pathDir + '/' + encodedFilename;
-                    source.type = file.type;
-                    
-                    console.log('Video source URL:', source.src, 'Type:', source.type);
-                    
-                    // Add source error handling
-                    source.onerror = function(e) {
-                        console.error('Video source failed to load:', source.src, 'Error:', e);
-                    };
-                    
-                    video.appendChild(source);
-                    
-                    // Add fallback text for unsupported formats
-                    const fallbackText = document.createElement('p');
-                    fallbackText.style.color = 'white';
-                    fallbackText.innerHTML = `Your browser does not support the video format. <a href="${source.src}" target="_blank" style="color: #3498db;">Download the video</a> to view it.`;
-                    video.appendChild(fallbackText);
-                    
-                    lightboxContent.appendChild(video);
-                } else {
-                    // Create image element for lightbox
-                    const img = document.createElement('img');
-                    // Normalize path separators and construct proper URL
-                    const normalizedPath = file.path.replace(/\\/g, '/');
-                    const pathParts = normalizedPath.split('/');
-                    const encodedFilename = encodeURIComponent(pathParts.pop());
-                    const pathDir = pathParts.join('/');
-                    img.src = pathDir + '/' + encodedFilename;
-                    img.alt = normalizedPath.split('/').pop();
-                    lightboxContent.appendChild(img);
+                // Firefox-specific handling
+                const isFirefox = navigator.userAgent.includes('Firefox');
+                if (isFirefox) {
+                    console.log('Firefox detected, applying specific handling');
+                    video.preload = 'auto';
                 }
                 
-                // Create metadata display
+                // Add error handling
+                video.onerror = (e) => {
+                    console.error('Video failed to load:', file.path, 'Error:', e);
+                    this.createVideoFallback(file);
+                };
+                
+                // Add load events for debugging
+                video.onloadstart = () => console.log('Video load started:', file.name);
+                video.oncanplay = () => console.log('Video can play:', file.name);
+                
+                // Create source element
+                const source = document.createElement('source');
+                const normalizedPath = file.path.replace(/\\/g, '/');
+                const pathParts = normalizedPath.split('/');
+                const encodedFilename = encodeURIComponent(pathParts.pop());
+                const pathDir = pathParts.join('/');
+                source.src = pathDir + '/' + encodedFilename;
+                source.type = file.type;
+                
+                console.log('Video source URL:', source.src, 'Type:', source.type);
+                
+                source.onerror = (e) => console.error('Video source failed to load:', source.src, 'Error:', e);
+                
+                video.appendChild(source);
+                
+                // Add fallback text
+                const fallbackText = document.createElement('p');
+                fallbackText.style.color = 'white';
+                fallbackText.innerHTML = `Your browser does not support the video format. <a href="${source.src}" target="_blank" style="color: #3498db;">Download the video</a> to view it.`;
+                video.appendChild(fallbackText);
+                
+                return video;
+            }
+            
+            createVideoFallback(file) {
+                const fallback = document.createElement('div');
+                fallback.style.color = 'white';
+                fallback.style.textAlign = 'center';
+                fallback.style.padding = '50px';
+                fallback.innerHTML = `
+                    <h3>Video could not be loaded</h3>
+                    <p>File: ${file.name}</p>
+                    <p>Type: ${file.type}</p>
+                    <p>Browser: ${navigator.userAgent.includes('Firefox') ? 'Firefox' : 'Other'}</p>
+                    <a href="${file.path}" target="_blank" style="color: #3498db;">Download Video</a>
+                `;
+                this.lightboxContent.innerHTML = '';
+                this.lightboxContent.appendChild(fallback);
+            }
+            
+            // Image handling utilities
+            createImageElement(file) {
+                const img = document.createElement('img');
+                const normalizedPath = file.path.replace(/\\/g, '/');
+                const pathParts = normalizedPath.split('/');
+                const encodedFilename = encodeURIComponent(pathParts.pop());
+                const pathDir = pathParts.join('/');
+                img.src = pathDir + '/' + encodedFilename;
+                img.alt = normalizedPath.split('/').pop();
+                return img;
+            }
+            
+            // Metadata creation utilities
+            createMetadata(file) {
                 const metadataDiv = document.createElement('div');
                 metadataDiv.className = 'lightbox-metadata';
                 
@@ -1761,210 +1775,304 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 
                 // EXIF data (if available)
                 if (file.exif_data && Object.keys(file.exif_data).length > 0) {
-                    const exifDiv = document.createElement('div');
-                    exifDiv.className = 'metadata-exif';
-                    
-                    const exifToggle = document.createElement('div');
-                    exifToggle.className = 'exif-toggle';
-                    exifToggle.innerHTML = exifToggleExpanded ? 'EXIF Data ▲' : 'EXIF Data ▼';
-                    exifToggle.addEventListener('click', function() {
-                        const exifDetails = exifDiv.querySelector('.exif-details');
-                        const isCurrentlyExpanded = exifDetails.style.display !== 'none';
-                        exifDetails.style.display = isCurrentlyExpanded ? 'none' : 'block';
-                        exifToggle.innerHTML = isCurrentlyExpanded ? 'EXIF Data ▼' : 'EXIF Data ▲';
-                        // Update the global state when user clicks toggle
-                        exifToggleExpanded = !isCurrentlyExpanded;
-                    });
-                    
-                    const exifDetails = document.createElement('div');
-                    exifDetails.className = 'exif-details';
-                    // Set initial display state based on toggle state
-                    exifDetails.style.display = exifToggleExpanded ? 'block' : 'none';
-                    
-                    // Format EXIF data
-                    let exifContent = '';
-                    for (const [key, value] of Object.entries(file.exif_data)) {
-                        if (value && value !== '' && value !== 'Unknown') {
-                            exifContent += `<div class="exif-item"><strong>${key}:</strong> ${value}</div>`;
-                        }
-                    }
-                    exifDetails.innerHTML = exifContent;
-                    
-                    exifDiv.appendChild(exifToggle);
-                    exifDiv.appendChild(exifDetails);
+                    const exifDiv = this.createExifSection(file.exif_data);
                     metadataDiv.appendChild(exifDiv);
                 }
                 
-                lightboxContent.appendChild(metadataDiv);
+                return metadataDiv;
             }
             
-            // Open lightbox when clicking an item
-            items.forEach(item => {
-                item.addEventListener('click', function() {
-                    currentIndex = parseInt(this.getAttribute('data-index'));
-                    // Reset EXIF toggle state when opening new lightbox session
-                    exifToggleExpanded = false;
-                    showMedia(currentIndex);
-                    lightbox.classList.add('active');
+            createExifSection(exifData) {
+                const exifDiv = document.createElement('div');
+                exifDiv.className = 'metadata-exif';
+                
+                const exifToggle = document.createElement('div');
+                exifToggle.className = 'exif-toggle';
+                exifToggle.innerHTML = this.exifToggleExpanded ? 'EXIF Data ▲' : 'EXIF Data ▼';
+                exifToggle.addEventListener('click', () => {
+                    const exifDetails = exifDiv.querySelector('.exif-details');
+                    const isCurrentlyExpanded = exifDetails.style.display !== 'none';
+                    exifDetails.style.display = isCurrentlyExpanded ? 'none' : 'block';
+                    exifToggle.innerHTML = isCurrentlyExpanded ? 'EXIF Data ▼' : 'EXIF Data ▲';
+                    this.exifToggleExpanded = !isCurrentlyExpanded;
                 });
-            });
+                
+                const exifDetails = document.createElement('div');
+                exifDetails.className = 'exif-details';
+                exifDetails.style.display = this.exifToggleExpanded ? 'block' : 'none';
+                
+                // Format EXIF data
+                let exifContent = '';
+                for (const [key, value] of Object.entries(exifData)) {
+                    if (value && value !== '' && value !== 'Unknown') {
+                        exifContent += `<div class="exif-item"><strong>${key}:</strong> ${value}</div>`;
+                    }
+                }
+                exifDetails.innerHTML = exifContent;
+                
+                exifDiv.appendChild(exifToggle);
+                exifDiv.appendChild(exifDetails);
+                
+                return exifDiv;
+            }
             
-            // Navigate to previous media
-            prevButton.addEventListener('click', function() {
-                showMedia(currentIndex - 1);
-            });
+            // Main lightbox display function
+            showMedia(index) {
+                // Make sure index is within bounds
+                if (index < 0) index = this.allMediaFiles.length - 1;
+                if (index >= this.allMediaFiles.length) index = 0;
+                
+                this.currentIndex = index;
+                this.lightboxContent.innerHTML = '';
+                
+                const file = this.allMediaFiles[index];
+                console.log('Displaying file:', file.name, 'Type:', file.type, 'Browser:', navigator.userAgent.includes('Firefox') ? 'Firefox' : 'Other');
+                
+                // Create appropriate media element
+                if (file.type && file.type.toString().includes('video')) {
+                    const video = this.createVideoElement(file);
+                    this.lightboxContent.appendChild(video);
+                } else {
+                    const img = this.createImageElement(file);
+                    this.lightboxContent.appendChild(img);
+                }
+                
+                // Add metadata
+                const metadata = this.createMetadata(file);
+                this.lightboxContent.appendChild(metadata);
+            }
             
-            // Navigate to next media
-            nextButton.addEventListener('click', function() {
-                showMedia(currentIndex + 1);
-            });
+            // Navigation methods
+            showPrevious() {
+                this.showMedia(this.currentIndex - 1);
+            }
             
-            // Close lightbox when clicking the close button
-            closeButton.addEventListener('click', function() {
-                lightbox.classList.remove('active');
+            showNext() {
+                this.showMedia(this.currentIndex + 1);
+            }
+            
+            openLightbox(index) {
+                this.currentIndex = parseInt(index);
+                this.exifToggleExpanded = false; // Reset EXIF toggle state
+                this.showMedia(this.currentIndex);
+                this.lightbox.classList.add('active');
+            }
+            
+            closeLightbox() {
+                this.lightbox.classList.remove('active');
                 
                 // Pause any videos when closing lightbox
-                const video = lightboxContent.querySelector('video');
+                const video = this.lightboxContent.querySelector('video');
                 if (video) {
                     video.pause();
                 }
-            });
+            }
             
-            // Close lightbox when clicking outside the content
-            lightbox.addEventListener('click', function(e) {
-                if (e.target === lightbox) {
-                    lightbox.classList.remove('active');
-                    
-                    // Pause any videos when closing lightbox
-                    const video = lightboxContent.querySelector('video');
-                    if (video) {
-                        video.pause();
-                    }
-                }
-            });
-            
-            // Touch/swipe support for mobile devices
-            let touchStartX = 0;
-            let touchStartY = 0;
-            let touchEndX = 0;
-            let touchEndY = 0;
-            
-            lightboxContent.addEventListener('touchstart', function(e) {
-                touchStartX = e.changedTouches[0].screenX;
-                touchStartY = e.changedTouches[0].screenY;
-            });
-            
-            lightboxContent.addEventListener('touchend', function(e) {
-                touchEndX = e.changedTouches[0].screenX;
-                touchEndY = e.changedTouches[0].screenY;
+            // Event listener setup
+            setupEventListeners() {
+                // Lightbox navigation
+                this.prevButton.addEventListener('click', () => this.showPrevious());
+                this.nextButton.addEventListener('click', () => this.showNext());
+                this.closeButton.addEventListener('click', () => this.closeLightbox());
                 
-                const deltaX = touchEndX - touchStartX;
-                const deltaY = touchEndY - touchStartY;
-                
-                // Check if it's a horizontal swipe (more horizontal than vertical movement)
-                if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 50) {
-                    if (deltaX > 0) {
-                        // Swipe right - previous image
-                        showMedia(currentIndex - 1);
-                    } else {
-                        // Swipe left - next image
-                        showMedia(currentIndex + 1);
-                    }
-                    e.preventDefault(); // Prevent default touch behavior
-                } else if (Math.abs(deltaX) < 30 && Math.abs(deltaY) < 30) {
-                    // Small movement, treat as tap to close
-                    lightbox.classList.remove('active');
-                    
-                    // Pause any videos when closing lightbox
-                    const video = lightboxContent.querySelector('video');
-                    if (video) {
-                        video.pause();
-                    }
-                }
-            });
-            
-            // Prevent default touch behavior on lightbox content to enable swipe
-            lightboxContent.addEventListener('touchmove', function(e) {
-                e.preventDefault();
-            });
-            
-            // Handle keyboard navigation
-            document.addEventListener('keydown', function(e) {
-                if (lightbox.classList.contains('active')) {
-                    switch (e.key) {
-                        case 'Escape':
-                            // Close lightbox
-                            lightbox.classList.remove('active');
-                            
-                            // Pause any videos when closing lightbox
-                            const video = lightboxContent.querySelector('video');
-                            if (video) {
-                                video.pause();
-                            }
-                            break;
-                            
-                        case 'ArrowLeft':
-                            // Previous media
-                            showMedia(currentIndex - 1);
-                            break;
-                            
-                        case 'ArrowRight':
-                            // Next media
-                            showMedia(currentIndex + 1);
-                            break;
-                    }
-                }
-            });
-            
-            // Handle group navigation (remaining code as before)
-            const groupNavItems = document.querySelectorAll('.group-nav-item');
-            groupNavItems.forEach(item => {
-                item.addEventListener('click', function() {
-                    const groupId = this.getAttribute('data-group');
-                    const groupItems = document.getElementById('group-' + groupId);
-                    
-                    // Toggle visibility
-                    if (this.classList.contains('active')) {
-                        this.classList.remove('active');
-                        groupItems.classList.add('group-hidden');
-                    } else {
-                        this.classList.add('active');
-                        groupItems.classList.remove('group-hidden');
-                    }
-                    
-                    // Scroll to the group if it's being shown
-                    if (!groupItems.classList.contains('group-hidden')) {
-                        groupItems.scrollIntoView({ behavior: 'smooth' });
-                    }
-                });
-            });
-            
-            // Handle expand/collapse all functionality
-            const expandAllBtn = document.getElementById('expand-all');
-            const collapseAllBtn = document.getElementById('collapse-all');
-            
-            if (expandAllBtn && collapseAllBtn) {
-                expandAllBtn.addEventListener('click', function() {
-                    groupNavItems.forEach(item => {
-                        item.classList.add('active');
-                        const groupId = item.getAttribute('data-group');
-                        const groupItems = document.getElementById('group-' + groupId);
-                        groupItems.classList.remove('group-hidden');
+                // Open lightbox when clicking an item
+                this.items.forEach(item => {
+                    item.addEventListener('click', () => {
+                        const index = item.getAttribute('data-index');
+                        this.openLightbox(index);
                     });
                 });
                 
-                collapseAllBtn.addEventListener('click', function() {
-                    groupNavItems.forEach(item => {
-                        item.classList.remove('active');
-                        const groupId = item.getAttribute('data-group');
-                        const groupItems = document.getElementById('group-' + groupId);
-                        groupItems.classList.add('group-hidden');
-                    });
+                // Close lightbox when clicking outside content
+                this.lightbox.addEventListener('click', (e) => {
+                    if (e.target === this.lightbox) {
+                        this.closeLightbox();
+                    }
+                });
+                
+                // Touch/swipe support
+                this.setupTouchEvents();
+                
+                // Keyboard navigation
+                this.setupKeyboardEvents();
+                
+                // Group navigation
+                this.setupGroupNavigation();
+            }
+            
+            // Touch/swipe event handling
+            setupTouchEvents() {
+                let touchStartX = 0, touchStartY = 0, touchEndX = 0, touchEndY = 0;
+                
+                this.lightboxContent.addEventListener('touchstart', (e) => {
+                    touchStartX = e.changedTouches[0].screenX;
+                    touchStartY = e.changedTouches[0].screenY;
+                });
+                
+                this.lightboxContent.addEventListener('touchend', (e) => {
+                    touchEndX = e.changedTouches[0].screenX;
+                    touchEndY = e.changedTouches[0].screenY;
+                    
+                    const deltaX = touchEndX - touchStartX;
+                    const deltaY = touchEndY - touchStartY;
+                    
+                    // Check if it's a horizontal swipe
+                    if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 50) {
+                        if (deltaX > 0) {
+                            this.showPrevious(); // Swipe right - previous
+                        } else {
+                            this.showNext(); // Swipe left - next
+                        }
+                        e.preventDefault();
+                    } else if (Math.abs(deltaX) < 30 && Math.abs(deltaY) < 30) {
+                        // Small movement, treat as tap to close
+                        this.closeLightbox();
+                    }
+                });
+                
+                // Prevent default touch behavior
+                this.lightboxContent.addEventListener('touchmove', (e) => e.preventDefault());
+            }
+            
+            // Keyboard event handling
+            setupKeyboardEvents() {
+                document.addEventListener('keydown', (e) => {
+                    if (this.lightbox.classList.contains('active')) {
+                        switch (e.key) {
+                            case 'Escape':
+                                this.closeLightbox();
+                                break;
+                            case 'ArrowLeft':
+                                this.showPrevious();
+                                break;
+                            case 'ArrowRight':
+                                this.showNext();
+                                break;
+                        }
+                    }
                 });
             }
-        });
+            
+            // Group navigation setup
+            setupGroupNavigation() {
+                const groupNavItems = document.querySelectorAll('.group-nav-item');
+                const expandAllBtn = document.getElementById('expand-all');
+                const collapseAllBtn = document.getElementById('collapse-all');
+                
+                groupNavItems.forEach(item => {
+                    item.addEventListener('click', () => {
+                        const groupId = item.getAttribute('data-group');
+                        const groupItems = document.getElementById('group-' + groupId);
+                        
+                        // Toggle visibility
+                        if (item.classList.contains('active')) {
+                            item.classList.remove('active');
+                            groupItems.classList.add('group-hidden');
+                        } else {
+                            item.classList.add('active');
+                            groupItems.classList.remove('group-hidden');
+                        }
+                        
+                        // Scroll to the group if it's being shown
+                        if (!groupItems.classList.contains('group-hidden')) {
+                            groupItems.scrollIntoView({ behavior: 'smooth' });
+                        }
+                    });
+                });
+                
+                // Handle expand/collapse all functionality
+                if (expandAllBtn && collapseAllBtn) {
+                    expandAllBtn.addEventListener('click', () => {
+                        groupNavItems.forEach(item => {
+                            item.classList.add('active');
+                            const groupId = item.getAttribute('data-group');
+                            const groupItems = document.getElementById('group-' + groupId);
+                            groupItems.classList.remove('group-hidden');
+                        });
+                    });
+                    
+                    collapseAllBtn.addEventListener('click', () => {
+                        groupNavItems.forEach(item => {
+                            item.classList.remove('active');
+                            const groupId = item.getAttribute('data-group');
+                            const groupItems = document.getElementById('group-' + groupId);
+                            groupItems.classList.add('group-hidden');
+                        });
+                    });
+                }
+            }
+            
+            // Thumbnail size control
+            setupThumbnailSizeControl() {
+                const slider = document.getElementById('thumbnailSize');
+                if (slider) {
+                    // Load saved thumbnail size
+                    const savedSize = localStorage.getItem('thumbnailSize');
+                    if (savedSize) {
+                        slider.value = savedSize;
+                    }
+                    
+                    // Apply initial size
+                    this.updateThumbnailSize(slider.value);
+                    
+                    // Setup resize handler
+                    let resizeTimeout;
+                    window.addEventListener('resize', () => {
+                        clearTimeout(resizeTimeout);
+                        resizeTimeout = setTimeout(() => this.updateThumbnailSize(slider.value), 250);
+                    });
+                    
+                    // Apply size after short delay to ensure all elements are loaded
+                    setTimeout(() => this.updateThumbnailSize(slider.value), 100);
+                }
+            }
+            
+            updateThumbnailSize(size) {
+                const sizeValue = document.getElementById('sizeValue');
+                if (sizeValue) {
+                    sizeValue.textContent = size + 'px';
+                }
+                
+                // Don't apply dynamic sizing on mobile devices
+                if (window.innerWidth <= 700) {
+                    localStorage.setItem('thumbnailSize', size);
+                    return;
+                }
+                
+                // Calculate max size to prevent excessive stretching
+                const maxSize = Math.min(parseInt(size) * 1.5, 400);
+                
+                // Update gallery grids
+                const galleries = document.querySelectorAll('.date-gallery');
+                galleries.forEach(gallery => {
+                    gallery.style.gridTemplateColumns = `repeat(auto-fit, minmax(${size}px, ${maxSize}px))`;
+                    gallery.style.justifyContent = 'start';
+                });
+                
+                // Update thumbnail items
+                const items = document.querySelectorAll('.item');
+                items.forEach(item => {
+                    item.style.minWidth = size + 'px';
+                    item.style.minHeight = size + 'px';
+                    item.style.maxWidth = maxSize + 'px';
+                    item.style.maxHeight = maxSize + 'px';
+                    item.style.width = 'auto';
+                    item.style.height = 'auto';
+                    item.style.aspectRatio = '1';
+                });
+                
+                // Store preference
+                localStorage.setItem('thumbnailSize', size);
+            }
+        }
         
-        // Page selector functionality
+        // Utility functions for backward compatibility
+        function updateThumbnailSize(size) {
+            if (window.gallery) {
+                window.gallery.updateThumbnailSize(size);
+            }
+        }
+        
         function togglePageSelector(element) {
             const selector = element.querySelector('.page-selector');
             const allSelectors = document.querySelectorAll('.page-selector');
@@ -1986,100 +2094,25 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             window.location.href = currentUrl.toString();
         }
         
-        // Close page selector when clicking outside, but not when clicking inside the selector
-        document.addEventListener('click', function(e) {
-            if (!e.target.closest('.pagination-info')) {
-                document.querySelectorAll('.page-selector.active').forEach(selector => {
-                    selector.classList.remove('active');
-                });
-            }
-        });
-        
-        // Prevent page selector from closing when clicking on page options
-        document.addEventListener('click', function(e) {
-            if (e.target.classList.contains('page-option')) {
-                e.stopPropagation();
-            }
-        });
-        
-        // Thumbnail size control functionality
-        function updateThumbnailSize(size) {
-            const sizeValue = document.getElementById('sizeValue');
-            if (sizeValue) {
-                sizeValue.textContent = size + 'px';
-            }
-            
-            // Get current window width to determine responsive behavior
-            const windowWidth = window.innerWidth;
-            
-            // Don't apply dynamic sizing on mobile devices
-            if (windowWidth <= 700) {
-                localStorage.setItem('thumbnailSize', size);
-                return;
-            }
-            
-            // Calculate max size to prevent single thumbnails from stretching too much
-            const maxSize = Math.min(parseInt(size) * 1.5, 400); // Cap at 1.5x the slider value or 400px
-            
-            // Update all gallery grids to use auto-fit with size constraints
-            const galleries = document.querySelectorAll('.date-gallery');
-            galleries.forEach(gallery => {
-                // Use auto-fit but limit maximum size to prevent single items from stretching too much
-                gallery.style.gridTemplateColumns = `repeat(auto-fit, minmax(${size}px, ${maxSize}px))`;
-                gallery.style.justifyContent = 'start'; // Align items to start instead of stretching
-            });
-            
-            // Update all thumbnail items to use the new size constraints
-            const items = document.querySelectorAll('.item');
-            items.forEach(item => {
-                item.style.minWidth = size + 'px';
-                item.style.minHeight = size + 'px';
-                item.style.maxWidth = maxSize + 'px';
-                item.style.maxHeight = maxSize + 'px';
-                item.style.width = 'auto';
-                item.style.height = 'auto';
-                item.style.aspectRatio = '1';
-            });
-            
-            // Store the preference in localStorage
-            localStorage.setItem('thumbnailSize', size);
-        }
-        
-        // Handle window resize to recalculate columns
-        function handleResize() {
-            const slider = document.getElementById('thumbnailSize');
-            if (slider) {
-                updateThumbnailSize(slider.value);
-            }
-        }
-        
-        // Load saved thumbnail size on page load
+        // Initialize gallery when DOM is ready
         document.addEventListener('DOMContentLoaded', function() {
-            const savedSize = localStorage.getItem('thumbnailSize');
-            const slider = document.getElementById('thumbnailSize');
+            window.gallery = new InstantGallery();
             
-            if (savedSize && slider) {
-                slider.value = savedSize;
-                // Apply the saved size immediately
-                updateThumbnailSize(savedSize);
-            } else if (slider) {
-                // Apply the default size from the slider
-                updateThumbnailSize(slider.value);
-            }
-            
-            // Add window resize listener
-            let resizeTimeout;
-            window.addEventListener('resize', function() {
-                clearTimeout(resizeTimeout);
-                resizeTimeout = setTimeout(handleResize, 250); // Debounce resize events
+            // Close page selector when clicking outside
+            document.addEventListener('click', function(e) {
+                if (!e.target.closest('.pagination-info')) {
+                    document.querySelectorAll('.page-selector.active').forEach(selector => {
+                        selector.classList.remove('active');
+                    });
+                }
             });
             
-            // Also trigger resize after a short delay to ensure all elements are loaded
-            setTimeout(function() {
-                if (slider) {
-                    updateThumbnailSize(slider.value);
+            // Prevent page selector from closing when clicking on page options
+            document.addEventListener('click', function(e) {
+                if (e.target.classList.contains('page-option')) {
+                    e.stopPropagation();
                 }
-            }, 100);
+            });
         });
     </script>
 </body>
