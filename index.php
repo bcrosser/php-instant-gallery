@@ -4,6 +4,11 @@ $base_dir = './pics';  // Base directory containing media files
 $thumbs_dir = './thumbs';  // Directory for generated thumbnails
 $thumb_width = 200;       // default thumbnail size
 $show_gps_coords = false;        // Show GPS coordinates in image details
+
+// FFmpeg/FFprobe executable paths - set these if not in system PATH
+$ffmpeg_path = 'C:\\Utils\\ffmpeg\\bin\\ffmpeg.exe';  // e.g., 'C:\\ffmpeg\\bin\\ffmpeg.exe' or '/usr/local/bin/ffmpeg' or leave empty for system PATH
+$ffprobe_path = 'C:\\Utils\\ffmpeg\\bin\\ffprobe.exe'; // e.g., 'C:\\ffmpeg\\bin\\ffprobe.exe' or '/usr/local/bin/ffprobe' or leave empty for system PATH
+
 // Directory navigation links - add your custom links here
 $nav_links = [
     // Format: 'Display Name' => 'path/to/directory'
@@ -43,39 +48,118 @@ class GalleryConfig {
     }
     
     public static function createVideoThumbnail($source, $destination) {
-        global $thumb_width;
-        $thumb_height = $thumb_width; // Default square, will be adjusted if needed
+        global $thumb_width, $ffmpeg_path;
+        
+        // Determine ffmpeg executable path
+        $ffmpeg_cmd = !empty($ffmpeg_path) ? $ffmpeg_path : 'ffmpeg';
+        
+        // Get video metadata to determine aspect ratio
+        $video_metadata = self::getVideoMetadata($source);
+        $width = $thumb_width;
+        $height = $thumb_width; // Default to square
+        
+        // Extract video dimensions from metadata if available
+        if ($video_metadata && isset($video_metadata['metadata'])) {
+            $metadata = $video_metadata['metadata'];
+            if (isset($metadata['Width']) && isset($metadata['Height'])) {
+                // Parse width and height from metadata (format: "1280 pixels")
+                $video_width = (int)str_replace(' pixels', '', $metadata['Width']);
+                $video_height = (int)str_replace(' pixels', '', $metadata['Height']);
+                
+                if ($video_width > 0 && $video_height > 0) {
+                    // Calculate proportional height based on video aspect ratio
+                    $aspect_ratio = $video_width / $video_height;
+                    
+                    if ($aspect_ratio > 1) {
+                        // Landscape: keep width, adjust height
+                        $width = $thumb_width;
+                        $height = round($thumb_width / $aspect_ratio);
+                    } else {
+                        // Portrait: keep height, adjust width
+                        $height = $thumb_width;
+                        $width = round($thumb_width * $aspect_ratio);
+                    }
+                    
+                    error_log("Video dimensions: {$video_width}x{$video_height}, aspect ratio: {$aspect_ratio}, thumbnail: {$width}x{$height}");
+                }
+            }
+        }
         
         // Extract a single frame at 1 second mark and save as JPEG
-        $command = "ffmpeg -i \"{$source}\" -ss 00:00:01 -vframes 1 -s {$thumb_width}x{$thumb_height} -f image2 \"{$destination}\"";
-        exec($command);
+        $command = "\"{$ffmpeg_cmd}\" -i \"{$source}\" -ss 00:00:01 -vframes 1 -s {$width}x{$height} -f image2 \"{$destination}\"";
+        error_log("Running ffmpeg command: " . $command);
+        exec($command, $output, $return_code);
+        error_log("FFmpeg return code: " . $return_code . ", output: " . implode("\n", $output));
         
         // Check if thumbnail was created, if not try again with different timestamp
         if (!file_exists($destination) || filesize($destination) == 0) {
-            $command = "ffmpeg -i \"{$source}\" -ss 00:00:10 -vframes 1 -s {$thumb_width}x{$thumb_height} -f image2 \"{$destination}\"";
-            exec($command);
+            $command = "\"{$ffmpeg_cmd}\" -i \"{$source}\" -ss 00:00:10 -vframes 1 -s {$width}x{$height} -f image2 \"{$destination}\"";
+            error_log("Retry ffmpeg command: " . $command);
+            exec($command, $output2, $return_code2);
+            error_log("FFmpeg retry return code: " . $return_code2 . ", output: " . implode("\n", $output2));
         }
         
         // If still fails, create an empty placeholder
         if (!file_exists($destination) || filesize($destination) == 0) {
-            // Create a black placeholder with text
-            $img = imagecreatetruecolor($thumb_width, $thumb_height);
+            // Create a black placeholder with text maintaining aspect ratio
+            $img = imagecreatetruecolor($width, $height);
             $text_color = imagecolorallocate($img, 255, 255, 255);
             $bg_color = imagecolorallocate($img, 0, 0, 0);
-            imagefilledrectangle($img, 0, 0, $thumb_width, $thumb_height, $bg_color);
-            imagestring($img, 3, $thumb_width/4, $thumb_height/2, "Video", $text_color);
+            imagefilledrectangle($img, 0, 0, $width, $height, $bg_color);
+            
+            // Center the "Video" text
+            $text_x = max(0, ($width - 40) / 2);  // Approximate text width
+            $text_y = max(0, $height / 2);
+            imagestring($img, 3, $text_x, $text_y, "Video", $text_color);
+            
             imagejpeg($img, $destination, 90);
             imagedestroy($img);
         }
     }
     
     public static function getVideoCreationDate($video_path) {
-        $command = "ffprobe -v quiet -print_format json -show_format \"{$video_path}\"";
+        $metadata = self::getVideoMetadata($video_path);
+        
+        if ($metadata && isset($metadata['creation_date'])) {
+            return $metadata['creation_date'];
+        }
+        
+        // If no valid date found in metadata, fall back to file modification time
+        return filemtime($video_path);
+    }
+    
+    public static function getVideoMetadata($video_path) {
+        global $show_gps_coords, $ffprobe_path;
+        
+        // Determine ffprobe executable path
+        $ffprobe_cmd = !empty($ffprobe_path) ? $ffprobe_path : 'ffprobe';
+        
+        // Get both format and stream metadata
+        $command = "\"{$ffprobe_cmd}\" -v quiet -print_format json -show_format -show_streams \"{$video_path}\"";
+        error_log("Running ffprobe command: " . $command);
         $output = shell_exec($command);
+        error_log("FFprobe output length: " . strlen($output) . " characters");
+        
+        if (empty($output)) {
+            error_log("FFprobe returned empty output for: " . $video_path);
+            return null;
+        }
+        
         $metadata = json_decode($output, true);
         
-        // Check various metadata fields that might contain creation date
-        if (!empty($metadata) && isset($metadata['format']) && isset($metadata['format']['tags'])) {
+        if (empty($metadata)) {
+            error_log("Failed to decode JSON from ffprobe output for: " . $video_path);
+            error_log("Raw output: " . $output);
+            return null;
+        }
+        
+        error_log("Successfully decoded ffprobe metadata for: " . $video_path);
+        
+        $extracted_metadata = array();
+        $creation_date = null;
+        
+        // Extract format metadata (container level)
+        if (isset($metadata['format']) && isset($metadata['format']['tags'])) {
             $tags = $metadata['format']['tags'];
             
             // Try different possible tag names for creation date
@@ -83,17 +167,202 @@ class GalleryConfig {
             
             foreach ($date_keys as $key) {
                 if (isset($tags[$key])) {
-                    // Try to parse the date in various formats
                     $date = strtotime($tags[$key]);
                     if ($date !== false) {
-                        return $date;
+                        $creation_date = $date;
+                        $extracted_metadata['Date Taken'] = date('Y-m-d H:i:s', $date);
+                        break;
+                    }
+                }
+            }
+            
+            // Extract other useful metadata
+            if (isset($tags['title'])) $extracted_metadata['Title'] = $tags['title'];
+            if (isset($tags['artist'])) $extracted_metadata['Artist'] = $tags['artist'];
+            if (isset($tags['comment'])) $extracted_metadata['Comment'] = $tags['comment'];
+            if (isset($tags['description'])) $extracted_metadata['Description'] = $tags['description'];
+            if (isset($tags['encoder'])) $extracted_metadata['Encoder'] = $tags['encoder'];
+            if (isset($tags['software'])) $extracted_metadata['Software'] = $tags['software'];
+            
+            // Android/smartphone specific metadata
+            if (isset($tags['com.android.capture.fps'])) {
+                $extracted_metadata['Capture FPS'] = $tags['com.android.capture.fps'] . ' fps';
+            }
+            
+            // Device/brand information
+            if (isset($tags['major_brand'])) $extracted_metadata['Format'] = strtoupper($tags['major_brand']);
+            if (isset($tags['compatible_brands'])) $extracted_metadata['Compatible Formats'] = $tags['compatible_brands'];
+            
+            // Extract GPS coordinates if available
+            $gps_coords = self::extractVideoGPSCoordinates($tags);
+            if ($show_gps_coords && $gps_coords) {
+                $extracted_metadata['GPS Latitude'] = number_format($gps_coords['latitude'], 6) . '° ' . $gps_coords['lat_ref'];
+                $extracted_metadata['GPS Longitude'] = number_format($gps_coords['longitude'], 6) . '° ' . $gps_coords['lon_ref'];
+                $extracted_metadata['Google Maps Link'] = '<a style="color: lightseagreen" href="https://maps.google.com/maps?q=' . $gps_coords['latitude'] . ',' . $gps_coords['longitude'] .'" target="_blank">View on Maps</a>';
+            }
+        }
+        
+        // Extract stream metadata (video/audio streams)
+        if (isset($metadata['streams']) && is_array($metadata['streams'])) {
+            foreach ($metadata['streams'] as $stream) {
+                if ($stream['codec_type'] === 'video') {
+                    // Video stream information
+                    if (isset($stream['width'])) $extracted_metadata['Width'] = $stream['width'] . ' pixels';
+                    if (isset($stream['height'])) $extracted_metadata['Height'] = $stream['height'] . ' pixels';
+                    if (isset($stream['codec_name'])) $extracted_metadata['Video Codec'] = strtoupper($stream['codec_name']);
+                    if (isset($stream['bit_rate'])) $extracted_metadata['Video Bitrate'] = round($stream['bit_rate'] / 1000) . ' kbps';
+                    if (isset($stream['r_frame_rate'])) {
+                        $fps_parts = explode('/', $stream['r_frame_rate']);
+                        if (count($fps_parts) == 2 && $fps_parts[1] != 0) {
+                            $fps = round($fps_parts[0] / $fps_parts[1], 2);
+                            $extracted_metadata['Frame Rate'] = $fps . ' fps';
+                        }
+                    }
+                    if (isset($stream['duration'])) {
+                        $duration = (float)$stream['duration'];
+                        $extracted_metadata['Duration'] = gmdate('H:i:s', $duration);
+                    }
+                    
+                    // Check for GPS in video stream tags
+                    if (isset($stream['tags']) && !$gps_coords) {
+                        $stream_gps = self::extractVideoGPSCoordinates($stream['tags']);
+                        if ($show_gps_coords && $stream_gps) {
+                            $extracted_metadata['GPS Latitude'] = number_format($stream_gps['latitude'], 6) . '° ' . $stream_gps['lat_ref'];
+                            $extracted_metadata['GPS Longitude'] = number_format($stream_gps['longitude'], 6) . '° ' . $stream_gps['lon_ref'];
+                            $extracted_metadata['Google Maps Link'] = '<a style="color: lightseagreen" href="https://maps.google.com/maps?q=' . $stream_gps['latitude'] . ',' . $stream_gps['longitude'] .'" target="_blank">View on Maps</a>';
+                        }
+                    }
+                } elseif ($stream['codec_type'] === 'audio') {
+                    // Audio stream information
+                    if (isset($stream['codec_name'])) $extracted_metadata['Audio Codec'] = strtoupper($stream['codec_name']);
+                    if (isset($stream['bit_rate'])) $extracted_metadata['Audio Bitrate'] = round($stream['bit_rate'] / 1000) . ' kbps';
+                    if (isset($stream['sample_rate'])) $extracted_metadata['Sample Rate'] = $stream['sample_rate'] . ' Hz';
+                    if (isset($stream['channels'])) $extracted_metadata['Audio Channels'] = $stream['channels'];
+                }
+            }
+        }
+        
+        // Add duration from format if not found in streams
+        if (!isset($extracted_metadata['Duration']) && isset($metadata['format']['duration'])) {
+            $duration = (float)$metadata['format']['duration'];
+            $extracted_metadata['Duration'] = gmdate('H:i:s', $duration);
+        }
+        
+        // Add file size
+        if (isset($metadata['format']['size'])) {
+            $size = (int)$metadata['format']['size'];
+            if ($size < 1024 * 1024) {
+                $extracted_metadata['File Size'] = round($size / 1024, 1) . ' KB';
+            } else if ($size < 1024 * 1024 * 1024) {
+                $extracted_metadata['File Size'] = round($size / (1024 * 1024), 1) . ' MB';
+            } else {
+                $extracted_metadata['File Size'] = round($size / (1024 * 1024 * 1024), 1) . ' GB';
+            }
+        }
+        
+        return array(
+            'creation_date' => $creation_date,
+            'metadata' => $extracted_metadata
+        );
+    }
+    
+    private static function extractVideoGPSCoordinates($tags) {
+        // Check for various GPS coordinate formats in video metadata
+        $gps_patterns = [
+            // Android/smartphone location format: +47.4818-122.2018/
+            'location' => '/^([+-]?\d+\.?\d*)([+-]\d+\.?\d*)(?:[+-]\d+\.?\d*)?\/?\s*$/',
+            'location-eng' => '/^([+-]?\d+\.?\d*)([+-]\d+\.?\d*)(?:[+-]\d+\.?\d*)?\/?\s*$/',
+            // Standard GPS patterns with comma/space separation
+            'gps' => '/^([+-]?\d+\.?\d*)[,\s]+([+-]?\d+\.?\d*)/',
+            // QuickTime location format
+            'com.apple.quicktime.location.ISO6709' => '/^([+-]\d+\.?\d*)([+-]\d+\.?\d*)/',
+            // Other possible formats
+            'geo' => '/^([+-]?\d+\.?\d*)[,\s]+([+-]?\d+\.?\d*)/',
+            'coordinates' => '/^([+-]?\d+\.?\d*)[,\s]+([+-]?\d+\.?\d*)/'
+        ];
+        
+        foreach ($gps_patterns as $key => $pattern) {
+            if (isset($tags[$key])) {
+                $location_string = $tags[$key];
+                
+                if (preg_match($pattern, $location_string, $matches)) {
+                    $latitude = (float)$matches[1];
+                    $longitude = (float)$matches[2];
+                    
+                    // Validate coordinates are within valid ranges
+                    if ($latitude >= -90 && $latitude <= 90 && $longitude >= -180 && $longitude <= 180) {
+                        return array(
+                            'latitude' => $latitude,
+                            'longitude' => $longitude,
+                            'lat_ref' => $latitude >= 0 ? 'N' : 'S',
+                            'lon_ref' => $longitude >= 0 ? 'E' : 'W'
+                        );
                     }
                 }
             }
         }
         
-        // If no valid date found in metadata, fall back to file modification time
-        return filemtime($video_path);
+        // Try to extract from individual lat/lon fields
+        $lat_keys = ['latitude', 'lat', 'gps_latitude'];
+        $lon_keys = ['longitude', 'lon', 'lng', 'gps_longitude'];
+        
+        $latitude = null;
+        $longitude = null;
+        
+        foreach ($lat_keys as $lat_key) {
+            if (isset($tags[$lat_key])) {
+                $latitude = (float)$tags[$lat_key];
+                break;
+            }
+        }
+        
+        foreach ($lon_keys as $lon_key) {
+            if (isset($tags[$lon_key])) {
+                $longitude = (float)$tags[$lon_key];
+                break;
+            }
+        }
+        
+        if ($latitude !== null && $longitude !== null && 
+            $latitude >= -90 && $latitude <= 90 && 
+            $longitude >= -180 && $longitude <= 180) {
+            return array(
+                'latitude' => $latitude,
+                'longitude' => $longitude,
+                'lat_ref' => $latitude >= 0 ? 'N' : 'S',
+                'lon_ref' => $longitude >= 0 ? 'E' : 'W'
+            );
+        }
+        
+        return null;
+    }
+    
+    // Test if FFmpeg and FFprobe are accessible
+    public static function testFFmpegTools() {
+        global $ffmpeg_path, $ffprobe_path;
+        
+        $ffmpeg_cmd = !empty($ffmpeg_path) ? $ffmpeg_path : 'ffmpeg';
+        $ffprobe_cmd = !empty($ffprobe_path) ? $ffprobe_path : 'ffprobe';
+        
+        // Test ffmpeg
+        $ffmpeg_test = shell_exec("\"{$ffmpeg_cmd}\" -version 2>&1");
+        $ffmpeg_works = strpos($ffmpeg_test, 'ffmpeg version') !== false;
+        
+        // Test ffprobe
+        $ffprobe_test = shell_exec("\"{$ffprobe_cmd}\" -version 2>&1");
+        $ffprobe_works = strpos($ffprobe_test, 'ffprobe version') !== false;
+        
+        error_log("FFmpeg test (cmd: {$ffmpeg_cmd}): " . ($ffmpeg_works ? 'WORKING' : 'FAILED'));
+        error_log("FFprobe test (cmd: {$ffprobe_cmd}): " . ($ffprobe_works ? 'WORKING' : 'FAILED'));
+        
+        if (!$ffmpeg_works) {
+            error_log("FFmpeg output: " . $ffmpeg_test);
+        }
+        if (!$ffprobe_works) {
+            error_log("FFprobe output: " . $ffprobe_test);
+        }
+        
+        return ['ffmpeg' => $ffmpeg_works, 'ffprobe' => $ffprobe_works];
     }
     
     // Size ranges for grouping files
@@ -456,8 +725,19 @@ function get_media_files($dir) {
                 // Use centralized video MIME type detection
                 $type = GalleryConfig::getVideoMimeType($filename);
                 
-                // Extract creation date from video metadata using centralized method
-                $taken = GalleryConfig::getVideoCreationDate($path);
+                // Extract comprehensive metadata from video using centralized method
+                $video_metadata = GalleryConfig::getVideoMetadata($path);
+                if ($video_metadata) {
+                    $taken = $video_metadata['creation_date'] ?: 0;
+                    $exif = $video_metadata['metadata'];
+                    
+                    // Debug: Log video metadata extraction
+                    error_log("Video metadata for {$filename}: " . print_r($video_metadata, true));
+                } else {
+                    $taken = 0;
+                    $exif = null;
+                    error_log("No video metadata found for {$filename}");
+                }
             }
             
             // If no taken date found, use modification time
@@ -482,6 +762,12 @@ function get_media_files($dir) {
 
 // Main logic
 $media_files = get_media_files($current_dir);
+
+// Test FFmpeg tools availability
+$ffmpeg_status = GalleryConfig::testFFmpegTools();
+if (!$ffmpeg_status['ffmpeg'] || !$ffmpeg_status['ffprobe']) {
+    error_log("WARNING: FFmpeg tools not working properly. Video thumbnails and metadata will not work.");
+}
 
 // Get sort and filter parameters from URL
 $sort = isset($_GET['sort']) ? $_GET['sort'] : 'modified_desc';
@@ -616,8 +902,15 @@ foreach ($paginated_files as $file) {
         $thumb_path = $thumbs_dir . '/' . basename($file['path']);
     }
     
+    error_log("Processing file: {$file['name']}, is_video: " . ($is_video ? 'true' : 'false') . ", thumb_path: {$thumb_path}");
+    
     // Skip if thumbnail already exists
-    if (file_exists($thumb_path)) continue;
+    if (file_exists($thumb_path)) {
+        error_log("Thumbnail already exists: {$thumb_path}");
+        continue;
+    }
+    
+    error_log("Creating thumbnail for: {$file['path']} -> {$thumb_path}");
     
     // Handle different file types
     if ($is_video) {
@@ -631,6 +924,13 @@ foreach ($paginated_files as $file) {
                 create_thumbnail($file['path'], $thumb_path, $thumb_width);
                 break;
         }
+    }
+    
+    // Check if thumbnail was successfully created
+    if (file_exists($thumb_path)) {
+        error_log("Thumbnail successfully created: {$thumb_path}");
+    } else {
+        error_log("FAILED to create thumbnail: {$thumb_path}");
     }
 }
 
@@ -705,7 +1005,9 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             background: var(--sidebar-item);
             color: white;
         }
-
+        .filesize {
+            color: blueviolet;
+        }
         .group-controls {
             display: flex;
             margin-bottom: 10px;
@@ -1414,7 +1716,7 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                                 $video_thumb_path = GalleryConfig::getVideoThumbnailPath($file['path'], $thumbs_dir);
                             ?>
                                 <!-- Use img for video thumbnails to prevent Firefox from preloading videos -->
-                                <img src="<?= rawurlencode(basename($video_thumb_path)) ?>" 
+                                <img src="<?= $thumbs_dir . '/' . rawurlencode(basename($video_thumb_path)) ?>" 
                                     alt="<?= htmlspecialchars(basename($file['path'])) ?>"
                                     loading="lazy">
                                 <div class="play-button">▶</div>
@@ -1427,7 +1729,6 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                                 <div class="info-filename"><?= htmlspecialchars($file['name']) ?></div>
                                 <div style="font-size: 0.8em; margin-top: 3px;">
                                     Size: <?= GalleryUtils::formatFileSize($file['size']) ?><br>
-                                    Modified: <?= date('M j, Y H:i', $file['modified']) ?><br>
                                     Taken: <?= date('M j, Y H:i', $file['taken']) ?>
                                 </div>
                             </div>
@@ -1517,6 +1818,10 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                         // Rename 'exif' to 'exif_data' for JavaScript consistency
                         if (isset($file['exif']) && $file['exif']) {
                             $enhanced_file['exif_data'] = $file['exif'];
+                            // Debug: Log EXIF data transfer
+                            error_log("Transferring EXIF data for {$file['name']}: " . print_r($file['exif'], true));
+                        } else {
+                            error_log("No EXIF data to transfer for {$file['name']}");
                         }
                         unset($enhanced_file['exif']); // Remove old field
                         
@@ -1641,6 +1946,10 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             
             // Metadata creation utilities
             createMetadata(file) {
+                console.log('Creating metadata for file:', file.name);
+                console.log('EXIF data available:', !!file.exif_data);
+                console.log('EXIF data content:', file.exif_data);
+                
                 const metadataDiv = document.createElement('div');
                 metadataDiv.className = 'lightbox-metadata';
                 
@@ -1652,13 +1961,13 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                     <span class="filename">${filename}</span>
                     <span class="filesize">${file.formatted_size || file.size}</span>
                     ${file.formatted_modified_date ? `<span class="modified-date">Modified: ${file.formatted_modified_date}</span>` : ''}
-                    ${file.formatted_taken_date ? `<span class="taken-date">Taken: ${file.formatted_taken_date}</span>` : ''}
+                    ${file.formatted_taken_date ? `<span class="taken-date filesize">Taken: ${file.formatted_taken_date}</span>` : ''}
                 `;
                 metadataDiv.appendChild(basicMetadata);
                 
                 // Navigation instructions
                 const navInstructions = document.createElement('div');
-                navInstructions.className = 'nav-instructions';
+                navInstructions.className = 'metadata-navigation';
                 navInstructions.innerHTML = 'Use ← → arrow keys or swipe left/right to navigate';
                 metadataDiv.appendChild(navInstructions);
                 
@@ -1666,6 +1975,8 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 if (file.exif_data && Object.keys(file.exif_data).length > 0) {
                     const exifDiv = this.createExifSection(file.exif_data);
                     metadataDiv.appendChild(exifDiv);
+                } else {
+                    console.log('No EXIF data found or EXIF data is empty');
                 }
                 
                 return metadataDiv;
