@@ -6,8 +6,8 @@ $thumb_width = 200;       // default thumbnail size
 $show_gps_coords = false;        // Show GPS coordinates in image details
 
 // FFmpeg/FFprobe executable paths - set these if not in system PATH
-$ffmpeg_path = 'C:\\Utils\\ffmpeg\\bin\\ffmpeg.exe';  // e.g., 'C:\\ffmpeg\\bin\\ffmpeg.exe' or '/usr/local/bin/ffmpeg' or leave empty for system PATH
-$ffprobe_path = 'C:\\Utils\\ffmpeg\\bin\\ffprobe.exe'; // e.g., 'C:\\ffmpeg\\bin\\ffprobe.exe' or '/usr/local/bin/ffprobe' or leave empty for system PATH
+$ffmpeg_path = '';  // e.g., 'C:\\ffmpeg\\bin\\ffmpeg.exe' or '/usr/local/bin/ffmpeg' or leave empty for system PATH
+$ffprobe_path = ''; // e.g., 'C:\\ffmpeg\\bin\\ffprobe.exe' or '/usr/local/bin/ffprobe' or leave empty for system PATH
 
 // Directory navigation links - add your custom links here
 $nav_links = [
@@ -24,13 +24,45 @@ $external_links = [
 // Constants and configuration arrays
 class GalleryConfig {
     // Supported file extensions
-    const SUPPORTED_EXTENSIONS = '/\.(jpg|jpeg|gif|png|mp4|webm|ogg|ogv|3gp|qt|mov|qtff|avi)$/i';
-    const IMAGE_EXTENSIONS = '/\.(jpg|gif|jpeg|png)$/i';
+    const SUPPORTED_EXTENSIONS = '/\.(jpg|jpeg|gif|png|webp|bmp|ico|apng|svg|pdf|mp4|webm|ogg|ogv|3gp|qt|mov|qtff|avi)$/i';
+    const IMAGE_EXTENSIONS = '/\.(jpg|gif|jpeg|png|webp|bmp|ico|apng|svg|pdf)$/i';
     const VIDEO_EXTENSIONS = '/\.(mp4|webm|ogg|ogv|3gp|qt|mov|qtff|avi)$/i';
     
     // Video utilities
     public static function isVideo($filename) {
         return preg_match(self::VIDEO_EXTENSIONS, $filename);
+    }
+    
+    public static function isImage($filename) {
+        return preg_match(self::IMAGE_EXTENSIONS, $filename);
+    }
+    
+    public static function isPDF($filename) {
+        return preg_match('/\.pdf$/i', $filename);
+    }
+    
+    public static function getImageMimeType($filename) {
+        if (preg_match('/\.(jpg|jpeg)$/i', $filename)) {
+            return 'image/jpeg';
+        } else if (preg_match('/\.png$/i', $filename)) {
+            return 'image/png';
+        } else if (preg_match('/\.gif$/i', $filename)) {
+            return 'image/gif';
+        } else if (preg_match('/\.webp$/i', $filename)) {
+            return 'image/webp';
+        } else if (preg_match('/\.bmp$/i', $filename)) {
+            return 'image/bmp';
+        } else if (preg_match('/\.ico$/i', $filename)) {
+            return 'image/x-icon';
+        } else if (preg_match('/\.apng$/i', $filename)) {
+            return 'image/apng';
+        } else if (preg_match('/\.svg$/i', $filename)) {
+            return 'image/svg+xml';
+        } else if (preg_match('/\.pdf$/i', $filename)) {
+            return 'application/pdf';
+        } else {
+            return 'image/jpeg'; // Default fallback
+        }
     }
     
     public static function getVideoMimeType($filename) {
@@ -53,6 +85,242 @@ class GalleryConfig {
     
     public static function getVideoThumbnailPath($video_path, $thumbs_dir) {
         return $thumbs_dir . '/' . basename($video_path) . '.jpg';
+    }
+    
+    public static function getImageThumbnailPath($image_path, $thumbs_dir) {
+        return $thumbs_dir . '/' . basename($image_path) . '.jpg';
+    }
+    
+    public static function createImageThumbnail($source, $destination, $width = 200) {
+        $filename = basename($source);
+        
+        // Handle PDF files specially
+        if (self::isPDF($source)) {
+            return self::createPDFThumbnail($source, $destination, $width);
+        }
+        
+        // Handle SVG files specially
+        if (preg_match('/\.svg$/i', $filename)) {
+            return self::createSVGThumbnail($source, $destination, $width);
+        }
+        
+        // Try to get image dimensions for supported formats
+        $dims = @getimagesize($source);
+        if (!$dims) {
+            error_log("Could not get image dimensions for: " . $source);
+            return false;
+        }
+        
+        $w = $dims[0];
+        $h = $dims[1];
+        
+        // Calculate new dimensions with preserved aspect ratio
+        $ratio = $w / $h;
+        if ($ratio < 1) { // Portrait
+            $new_width = $width * $ratio;
+            $new_height = $width;
+        } else {         // Landscape
+            $new_width = $width;
+            $new_height = $width / $ratio;
+        }
+        
+        // Create blank canvas
+        $canvas = imagecreatetruecolor($new_width, $new_height);
+        
+        // Load original image based on type
+        $img = null;
+        $image_type = $dims[2];
+        
+        switch ($image_type) {
+            case IMAGETYPE_JPEG:
+                $img = @imagecreatefromjpeg($source);
+                break;
+            case IMAGETYPE_PNG:
+                $img = @imagecreatefrompng($source);
+                // Preserve transparency
+                imagealphablending($canvas, false);
+                imagesavealpha($canvas, true);
+                $transparent = imagecolorallocatealpha($canvas, 255, 255, 255, 127);
+                imagefill($canvas, 0, 0, $transparent);
+                break;
+            case IMAGETYPE_GIF:
+                $img = @imagecreatefromgif($source);
+                break;
+            case IMAGETYPE_WEBP:
+                if (function_exists('imagecreatefromwebp')) {
+                    $img = @imagecreatefromwebp($source);
+                }
+                break;
+            case IMAGETYPE_BMP:
+                if (function_exists('imagecreatefrombmp')) {
+                    $img = @imagecreatefrombmp($source);
+                }
+                break;
+            case IMAGETYPE_ICO:
+                // ICO files are complex, try basic approach
+                $img = @imagecreatefromstring(file_get_contents($source));
+                break;
+            default:
+                // Try generic approach
+                $img = @imagecreatefromstring(file_get_contents($source));
+                break;
+        }
+        
+        if (!$img) {
+            error_log("Could not create image resource for: " . $source);
+            return false;
+        }
+        
+        // Copy original image to canvas
+        imagecopyresampled($canvas, $img, 0, 0, 0, 0,
+                          $new_width, $new_height, $w, $h);
+        
+        // Save thumbnail
+        $success = imagejpeg($canvas, $destination, 85); // Quality: 85%
+        imagedestroy($canvas);
+        imagedestroy($img);
+        
+        return $success;
+    }
+    
+    public static function createPDFThumbnail($source, $destination, $width = 200) {
+        // For PDFs, we'll use PDF.js on the client side to generate thumbnails
+        // This function now just creates a temporary placeholder that will be replaced
+        // by actual PDF page thumbnails generated in the browser
+        
+        // Create a simple placeholder that indicates PDF.js will handle the real thumbnail
+        $img = imagecreatetruecolor($width, $width);
+        
+        // PDF.js loading colors
+        $bg_color = imagecolorallocate($img, 248, 249, 250);
+        $border_color = imagecolorallocate($img, 52, 144, 220);
+        $text_color = imagecolorallocate($img, 52, 144, 220);
+        $loading_color = imagecolorallocate($img, 108, 117, 125);
+        
+        // Fill background
+        imagefill($img, 0, 0, $bg_color);
+        
+        // Draw border
+        imagerectangle($img, 0, 0, $width-1, $width-1, $border_color);
+        
+        // Add PDF.js loading indicator
+        $text = "PDF";
+        $font_size = 5;
+        $text_width = strlen($text) * imagefontwidth($font_size);
+        $text_x = ($width - $text_width) / 2;
+        $text_y = ($width / 2) - 20;
+        imagestring($img, $font_size, $text_x, $text_y, $text, $text_color);
+        
+        // Add loading text
+        $loading_text = "Loading...";
+        $loading_font = 2;
+        $loading_width = strlen($loading_text) * imagefontwidth($loading_font);
+        $loading_x = ($width - $loading_width) / 2;
+        $loading_y = ($width / 2) + 10;
+        imagestring($img, $loading_font, $loading_x, $loading_y, $loading_text, $loading_color);
+        
+        $success = imagejpeg($img, $destination, 85);
+        imagedestroy($img);
+        
+        error_log("PDF placeholder created for PDF.js processing: " . $destination);
+        return $success;
+    }
+    
+    public static function getPDFInfo($source) {
+        // Try to get PDF page count and other info
+        $info = array(
+            'pages' => 1,
+            'title' => basename($source),
+            'size' => filesize($source)
+        );
+        
+        // Try to get page count using Imagick
+        if (class_exists('Imagick')) {
+            try {
+                $imagick = new Imagick();
+                $imagick->pingImage($source);
+                $info['pages'] = $imagick->getNumberImages();
+                $imagick->clear();
+                $imagick->destroy();
+                error_log("PDF page count detected via Imagick: " . $info['pages']);
+            } catch (Exception $e) {
+                error_log("Failed to get PDF page count via Imagick: " . $e->getMessage());
+            }
+        }
+        
+        // Fallback: try to parse PDF manually for page count
+        if ($info['pages'] == 1) {
+            try {
+                $content = file_get_contents($source);
+                if ($content !== false) {
+                    // Look for /Count in the PDF structure
+                    if (preg_match('/\/Count\s+(\d+)/', $content, $matches)) {
+                        $info['pages'] = (int)$matches[1];
+                        error_log("PDF page count detected via manual parsing: " . $info['pages']);
+                    }
+                    // Alternative: count page objects
+                    elseif (preg_match_all('/\/Type\s*\/Page[^s]/', $content, $matches)) {
+                        $info['pages'] = count($matches[0]);
+                        error_log("PDF page count detected via page object counting: " . $info['pages']);
+                    }
+                }
+            } catch (Exception $e) {
+                error_log("Failed to manually parse PDF: " . $e->getMessage());
+            }
+        }
+        
+        return $info;
+    }
+    
+    public static function createSVGThumbnail($source, $destination, $width = 200) {
+        // Try ImageMagick for SVG (best quality)
+        if (class_exists('Imagick')) {
+            try {
+                $imagick = new Imagick();
+                $imagick->setBackgroundColor(new ImagickPixel('white'));
+                $imagick->readImage($source);
+                $imagick->setImageFormat('jpeg');
+                $imagick->setImageCompressionQuality(85);
+                
+                // Resize maintaining aspect ratio
+                $imagick->thumbnailImage($width, $width, true);
+                
+                $success = $imagick->writeImage($destination);
+                $imagick->clear();
+                $imagick->destroy();
+                
+                if ($success) {
+                    error_log("SVG thumbnail created successfully with Imagick: " . $destination);
+                    return true;
+                }
+            } catch (Exception $e) {
+                error_log("Imagick SVG processing failed: " . $e->getMessage());
+            }
+        }
+        
+        // Fallback: create a simple placeholder for SVG
+        $img = imagecreatetruecolor($width, $width);
+        $bg_color = imagecolorallocate($img, 250, 250, 250);
+        $text_color = imagecolorallocate($img, 80, 150, 80);
+        $border_color = imagecolorallocate($img, 180, 220, 180);
+        
+        // Fill background
+        imagefill($img, 0, 0, $bg_color);
+        
+        // Draw border
+        imagerectangle($img, 0, 0, $width-1, $width-1, $border_color);
+        
+        // Add SVG text
+        $text = "SVG";
+        $text_x = ($width - strlen($text) * 10) / 2;
+        $text_y = $width / 2 - 10;
+        imagestring($img, 4, $text_x, $text_y, $text, $text_color);
+        
+        $success = imagejpeg($img, $destination, 85);
+        imagedestroy($img);
+        
+        error_log("SVG placeholder thumbnail created: " . $destination);
+        return $success;
     }
     
     public static function createVideoThumbnail($source, $destination) {
@@ -392,7 +660,15 @@ class GalleryConfig {
                 return strpos($file['path'], '.jpg') !== false || 
                        strpos($file['path'], '.jpeg') !== false || 
                        strpos($file['path'], '.png') !== false || 
-                       strpos($file['path'], '.gif') !== false;
+                       strpos($file['path'], '.gif') !== false ||
+                       strpos($file['path'], '.webp') !== false ||
+                       strpos($file['path'], '.bmp') !== false ||
+                       strpos($file['path'], '.ico') !== false ||
+                       strpos($file['path'], '.apng') !== false ||
+                       strpos($file['path'], '.svg') !== false;
+            },
+            'type_pdf' => function($file) {
+                return strpos($file['path'], '.pdf') !== false;
             },
             'type_video' => function($file) {
                 return strpos($file['path'], '.mp4') !== false || 
@@ -414,6 +690,15 @@ class GalleryConfig {
             },
             'type_png' => function($file) {
                 return strpos($file['path'], '.png') !== false;
+            },
+            'type_webp' => function($file) {
+                return strpos($file['path'], '.webp') !== false;
+            },
+            'type_bmp' => function($file) {
+                return strpos($file['path'], '.bmp') !== false;
+            },
+            'type_svg' => function($file) {
+                return strpos($file['path'], '.svg') !== false;
             },
             'type_mp4' => function($file) {
                 return strpos($file['path'], '.mp4') !== false;
@@ -705,46 +990,74 @@ function get_media_files($dir) {
             // Handle different file types
             if (preg_match(GalleryConfig::IMAGE_EXTENSIONS, $filename)) {
                 try {
-                    $type = exif_imagetype($path);
+                    // Use centralized image MIME type detection
+                    $type = GalleryConfig::getImageMimeType($filename);
                     
-                    // Try to get EXIF data for images
-                    if ($type == IMAGETYPE_JPEG || $type == IMAGETYPE_GIF || $type == IMAGETYPE_PNG) {
-                        $raw_exif = @exif_read_data($path);
-                        if ($raw_exif) {
-                            // Extract useful EXIF information
-                            $exif = array();
-                            
-                            // Basic camera info
-                            if (isset($raw_exif['Make'])) $exif['Camera Make'] = $raw_exif['Make'];
-                            if (isset($raw_exif['Model'])) $exif['Camera Model'] = $raw_exif['Model'];
-                            if (isset($raw_exif['DateTimeOriginal'])) {
-                                $exif['Date Taken'] = $raw_exif['DateTimeOriginal'];
-                                $taken = strtotime($raw_exif['DateTimeOriginal']);
+                    // For PDFs, set special handling
+                    if (GalleryConfig::isPDF($filename)) {
+                        $pdf_info = GalleryConfig::getPDFInfo($path);
+                        $exif = array(
+                            'File Type' => 'PDF Document',
+                            'Format' => 'Portable Document Format',
+                            'Pages' => $pdf_info['pages'] . ' page' . ($pdf_info['pages'] != 1 ? 's' : ''),
+                            'Title' => $pdf_info['title']
+                        );
+                    } else if (preg_match('/\.svg$/i', $filename)) {
+                        // SVG files - basic info only
+                        $exif = array(
+                            'File Type' => 'SVG Vector Image',
+                            'Format' => 'Scalable Vector Graphics'
+                        );
+                    } else {
+                        // Try to get EXIF data for traditional image formats
+                        $img_type = @exif_imagetype($path);
+                        if ($img_type && ($img_type == IMAGETYPE_JPEG || $img_type == IMAGETYPE_GIF || $img_type == IMAGETYPE_PNG)) {
+                            $raw_exif = @exif_read_data($path);
+                            if ($raw_exif) {
+                                // Extract useful EXIF information
+                                $exif = array();
+                                
+                                // Basic camera info
+                                if (isset($raw_exif['Make'])) $exif['Camera Make'] = $raw_exif['Make'];
+                                if (isset($raw_exif['Model'])) $exif['Camera Model'] = $raw_exif['Model'];
+                                if (isset($raw_exif['DateTimeOriginal'])) {
+                                    $exif['Date Taken'] = $raw_exif['DateTimeOriginal'];
+                                    $taken = strtotime($raw_exif['DateTimeOriginal']);
+                                }
+                                
+                                // Camera settings
+                                if (isset($raw_exif['COMPUTED']['ApertureFNumber'])) $exif['Aperture'] = $raw_exif['COMPUTED']['ApertureFNumber'];
+                                if (isset($raw_exif['ExposureTime'])) $exif['Exposure Time'] = $raw_exif['ExposureTime'];
+                                if (isset($raw_exif['ISOSpeedRatings'])) $exif['ISO'] = $raw_exif['ISOSpeedRatings'];
+                                if (isset($raw_exif['FocalLength'])) $exif['Focal Length'] = $raw_exif['FocalLength'];
+                                if (isset($raw_exif['Flash'])) $exif['Flash'] = $raw_exif['Flash'];
+                                
+                                // Image dimensions
+                                if (isset($raw_exif['COMPUTED']['Width'])) $exif['Width'] = $raw_exif['COMPUTED']['Width'] . ' pixels';
+                                if (isset($raw_exif['COMPUTED']['Height'])) $exif['Height'] = $raw_exif['COMPUTED']['Height'] . ' pixels';
+                                
+                                // GPS data if available
+                                $gps_coords = get_gps_coordinates($raw_exif);
+                                if ($show_gps_coords && $gps_coords) {
+                                    $exif['GPS Latitude'] = number_format($gps_coords['latitude'], 6) . '° ' . $gps_coords['lat_ref'];
+                                    $exif['GPS Longitude'] = number_format($gps_coords['longitude'], 6) . '° ' . $gps_coords['lon_ref'];
+                                    $exif['Google Maps Link'] = '<a href="https://maps.google.com/maps?q=' . $gps_coords['latitude'] . ',' . $gps_coords['longitude'] .'" target="_blank">View on Maps</a>';
+                                }
+                                
+                                // Software/processing
+                                if (isset($raw_exif['Software'])) $exif['Software'] = $raw_exif['Software'];
+                            } else {
+                                $exif = null;
                             }
-                            
-                            // Camera settings
-                            if (isset($raw_exif['COMPUTED']['ApertureFNumber'])) $exif['Aperture'] = $raw_exif['COMPUTED']['ApertureFNumber'];
-                            if (isset($raw_exif['ExposureTime'])) $exif['Exposure Time'] = $raw_exif['ExposureTime'];
-                            if (isset($raw_exif['ISOSpeedRatings'])) $exif['ISO'] = $raw_exif['ISOSpeedRatings'];
-                            if (isset($raw_exif['FocalLength'])) $exif['Focal Length'] = $raw_exif['FocalLength'];
-                            if (isset($raw_exif['Flash'])) $exif['Flash'] = $raw_exif['Flash'];
-                            
-                            // Image dimensions
-                            if (isset($raw_exif['COMPUTED']['Width'])) $exif['Width'] = $raw_exif['COMPUTED']['Width'] . ' pixels';
-                            if (isset($raw_exif['COMPUTED']['Height'])) $exif['Height'] = $raw_exif['COMPUTED']['Height'] . ' pixels';
-                            
-                            // GPS data if available
-                            $gps_coords = get_gps_coordinates($raw_exif);
-                            if ($show_gps_coords && $gps_coords) {
-                                $exif['GPS Latitude'] = number_format($gps_coords['latitude'], 6) . '° ' . $gps_coords['lat_ref'];
-                                $exif['GPS Longitude'] = number_format($gps_coords['longitude'], 6) . '° ' . $gps_coords['lon_ref'];
-                                $exif['Google Maps Link'] = '<a href="https://maps.google.com/maps?q=' . $gps_coords['latitude'] . ',' . $gps_coords['longitude'] .'" target="_blank">View on Maps</a>';
-                            }
-                            
-                            // Software/processing
-                            if (isset($raw_exif['Software'])) $exif['Software'] = $raw_exif['Software'];
                         } else {
-                            $exif = null;
+                            // For other image formats, try to get basic info
+                            $exif = array();
+                            $dims = @getimagesize($path);
+                            if ($dims) {
+                                $exif['Width'] = $dims[0] . ' pixels';
+                                $exif['Height'] = $dims[1] . ' pixels';
+                                $exif['File Type'] = strtoupper(pathinfo($filename, PATHINFO_EXTENSION)) . ' Image';
+                            }
                         }
                     }
                 } catch (Exception $e) {
@@ -921,18 +1234,28 @@ if ($actual_sort == 'name_asc' || $actual_sort == 'name_desc') {
     }
 }
 
-// Generate thumbnails for each media file
+// Generate thumbnails for each media file (skip PDFs - handled by JavaScript)
 foreach ($paginated_files as $file) {
-    // Use centralized video detection and thumbnail path generation
+    // Use centralized detection and thumbnail path generation
     $is_video = GalleryConfig::isVideo($file['path']);
+    $is_image = GalleryConfig::isImage($file['path']);
+    $is_pdf = GalleryConfig::isPDF($file['path']);
+    
+    // Skip PDFs - they'll be handled entirely by JavaScript
+    if ($is_pdf) {
+        continue;
+    }
     
     if ($is_video) {
         $thumb_path = GalleryConfig::getVideoThumbnailPath($file['path'], $thumbs_dir);
+    } else if ($is_image) {
+        $thumb_path = GalleryConfig::getImageThumbnailPath($file['path'], $thumbs_dir);
     } else {
-        $thumb_path = $thumbs_dir . '/' . basename($file['path']);
+        // Skip unsupported file types
+        continue;
     }
     
-    error_log("Processing file: {$file['name']}, is_video: " . ($is_video ? 'true' : 'false') . ", thumb_path: {$thumb_path}");
+    error_log("Processing file: {$file['name']}, is_video: " . ($is_video ? 'true' : 'false') . ", is_image: " . ($is_image ? 'true' : 'false') . ", thumb_path: {$thumb_path}");
     
     // Skip if thumbnail already exists
     if (file_exists($thumb_path)) {
@@ -945,14 +1268,21 @@ foreach ($paginated_files as $file) {
     // Handle different file types
     if ($is_video) {
         GalleryConfig::createVideoThumbnail($file['path'], $thumb_path);
-    } else {
-        // Handle image files
-        switch ($file['type']) {
-            case IMAGETYPE_JPEG:
-            case IMAGETYPE_PNG:
-            case IMAGETYPE_GIF:
-                create_thumbnail($file['path'], $thumb_path, $thumb_width);
-                break;
+    } else if ($is_image) {
+        // Use centralized image thumbnail creation
+        $success = GalleryConfig::createImageThumbnail($file['path'], $thumb_path, $thumb_width);
+        if (!$success) {
+            // Fallback to old method for basic image types
+            $img_type = @exif_imagetype($file['path']);
+            if ($img_type) {
+                switch ($img_type) {
+                    case IMAGETYPE_JPEG:
+                    case IMAGETYPE_PNG:
+                    case IMAGETYPE_GIF:
+                        create_thumbnail($file['path'], $thumb_path, $thumb_width);
+                        break;
+                }
+            }
         }
     }
     
@@ -977,6 +1307,10 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
 <head>
     <meta charset="UTF-8">
     <title><?= htmlspecialchars($current_dir_name) ?> - Media Gallery</title>
+    
+    <!-- PDF.js Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    
     <style>
         :root {
             --primary-color: #3498db;
@@ -1192,6 +1526,26 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             font-size: 50px;
             opacity: 0.8;
             pointer-events: none;
+        }
+
+        .pdf-thumbnail {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+        }
+
+        .pdf-icon {
+            position: absolute;
+            bottom: 5px;
+            right: 5px;
+            background: rgba(52, 144, 220, 0.9);
+            color: white;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 12px;
+            font-weight: bold;
         }
 
         .group-hidden { display: none; }
@@ -1530,7 +1884,152 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
         @media (max-width: 600px) {
             .date-gallery { grid-template-columns: repeat(auto-fit, minmax(150px, 250px)); }
         }
-    </style>
+
+        /* PDF Viewer Styles */
+        .pdf-viewer {
+            display: flex;
+            flex-direction: column;
+            height: 85vh;
+            width: 90vw;
+            max-width: 1000px;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .pdf-toolbar {
+            background: #f0f0f0;
+            padding: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid #ddd;
+            flex-shrink: 0;
+        }
+
+        .pdf-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .pdf-button {
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+
+        .pdf-button:hover {
+            background: var(--primary-dark);
+        }
+
+        .pdf-button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .pdf-page-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 14px;
+        }
+
+        .pdf-page-input {
+            width: 50px;
+            padding: 4px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            text-align: center;
+        }
+
+        .pdf-zoom-controls {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .pdf-zoom-select {
+            padding: 4px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+
+        .pdf-canvas-container {
+            flex: 1;
+            overflow: auto;
+            background: #525659;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            padding: 20px;
+        }
+
+        .pdf-canvas {
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+            background: white;
+            border-radius: 4px;
+            max-width: 100%;
+            height: auto;
+        }
+
+        .pdf-loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 200px;
+            color: #666;
+            font-size: 16px;
+        }
+
+        .pdf-error {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 200px;
+            color: #d32f2f;
+            font-size: 16px;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .pdf-error .retry-button {
+            margin-top: 15px;
+            background: #d32f2f;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        @media (max-width: 768px) {
+            .pdf-viewer {
+                width: 95vw;
+                height: 80vh;
+            }
+            
+            .pdf-toolbar {
+                flex-wrap: wrap;
+                gap: 10px;
+            }
+            
+            .pdf-controls {
+                flex-wrap: wrap;
+                gap: 5px;
+            }
+            
+            .pdf-button {
+                padding: 6px 10px;
+                font-size: 12px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -1592,14 +2091,26 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 <span class="group-label">Filter By Type</span>
                 <select id="filterBy" onchange="location.href='?dir=<?= urlencode($current_dir) ?>&sort=<?= urlencode($actual_sort) ?>&filter='+this.value+'&per_page=<?= $items_per_page ?>&page=1'">
                     <option value="type_all" <?= $filter_type == 'type_all' ? 'selected' : '' ?>>All Files</option>
-                    <optgroup label="By File Format">
-                        <option value="type_image" <?= $filter_type == 'type_image' ? 'selected' : '' ?>>Images Only (jpg, png, gif, etc.)</option>
-                        <option value="type_video" <?= $filter_type == 'type_video' ? 'selected' : '' ?>>Videos Only (mp4, webm)</option>
-                        <option value="type_jpg" <?= $filter_type == 'type_jpg' ? 'selected' : '' ?>>JPEG Images Only</option>
-                        <option value="type_gif" <?= $filter_type == 'type_gif' ? 'selected' : '' ?>>GIF Images Only</option>
-                        <option value="type_png" <?= $filter_type == 'type_png' ? 'selected' : '' ?>>PNG Images Only</option>
-                        <option value="type_mp4" <?= $filter_type == 'type_mp4' ? 'selected' : '' ?>>MP4 Videos Only</option>
-                        <option value="type_webm" <?= $filter_type == 'type_webm' ? 'selected' : '' ?>>WebM Videos Only</option>
+                    <optgroup label="By Category">
+                        <option value="type_image" <?= $filter_type == 'type_image' ? 'selected' : '' ?>>All Images</option>
+                        <option value="type_video" <?= $filter_type == 'type_video' ? 'selected' : '' ?>>All Videos</option>
+                        <option value="type_pdf" <?= $filter_type == 'type_pdf' ? 'selected' : '' ?>>PDF Documents</option>
+                    </optgroup>
+                    <optgroup label="Image Formats">
+                        <option value="type_jpg" <?= $filter_type == 'type_jpg' ? 'selected' : '' ?>>JPEG Images</option>
+                        <option value="type_png" <?= $filter_type == 'type_png' ? 'selected' : '' ?>>PNG Images</option>
+                        <option value="type_gif" <?= $filter_type == 'type_gif' ? 'selected' : '' ?>>GIF Images</option>
+                        <option value="type_webp" <?= $filter_type == 'type_webp' ? 'selected' : '' ?>>WebP Images</option>
+                        <option value="type_bmp" <?= $filter_type == 'type_bmp' ? 'selected' : '' ?>>BMP Images</option>
+                        <option value="type_svg" <?= $filter_type == 'type_svg' ? 'selected' : '' ?>>SVG Images</option>
+                    </optgroup>
+                    <optgroup label="Video Formats">
+                        <option value="type_mp4" <?= $filter_type == 'type_mp4' ? 'selected' : '' ?>>MP4 Videos</option>
+                        <option value="type_webm" <?= $filter_type == 'type_webm' ? 'selected' : '' ?>>WebM Videos</option>
+                        <option value="type_ogg" <?= $filter_type == 'type_ogg' ? 'selected' : '' ?>>OGG Videos</option>
+                        <option value="type_3gp" <?= $filter_type == 'type_3gp' ? 'selected' : '' ?>>3GP Videos</option>
+                        <option value="type_mov" <?= $filter_type == 'type_mov' ? 'selected' : '' ?>>QuickTime Videos</option>
+                        <option value="type_avi" <?= $filter_type == 'type_avi' ? 'selected' : '' ?>>AVI Videos</option>
                     </optgroup>
                 </select>
             </div>
@@ -1721,11 +2232,19 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                             switch ($filter_type) {
                                 case 'type_image': $type_label = 'Images'; break;
                                 case 'type_video': $type_label = 'Videos'; break;
+                                case 'type_pdf': $type_label = 'PDF Documents'; break;
                                 case 'type_jpg': $type_label = 'JPEG Images'; break;
-                                case 'type_gif': $type_label = 'GIF Images'; break;
                                 case 'type_png': $type_label = 'PNG Images'; break;
+                                case 'type_gif': $type_label = 'GIF Images'; break;
+                                case 'type_webp': $type_label = 'WebP Images'; break;
+                                case 'type_bmp': $type_label = 'BMP Images'; break;
+                                case 'type_svg': $type_label = 'SVG Images'; break;
                                 case 'type_mp4': $type_label = 'MP4 Videos'; break;
                                 case 'type_webm': $type_label = 'WebM Videos'; break;
+                                case 'type_ogg': $type_label = 'OGG Videos'; break;
+                                case 'type_3gp': $type_label = '3GP Videos'; break;
+                                case 'type_mov': $type_label = 'QuickTime Videos'; break;
+                                case 'type_avi': $type_label = 'AVI Videos'; break;
                             }
                             echo $type_label . ' - ' . date('l, F j, Y', strtotime($group_name));
                             ?>
@@ -1739,9 +2258,10 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                             $json_data = json_encode($file);
                             if ($json_data !== false && $json_data !== null):
                         ?>
-                        <div class="item" data-index="<?= $global_index++ ?>">
+                        <div class="item" data-index="<?= $global_index++ ?>" onclick="openViewer(<?= $global_index - 1 ?>, '<?= addslashes($file['path']) ?>', '<?= $is_video ? 'video' : (GalleryConfig::isPDF($file['path']) ? 'pdf' : 'image') ?>')">
                             <?php 
                             $is_video = GalleryConfig::isVideo($file['path']);
+                            $is_pdf = GalleryConfig::isPDF($file['path']);
                             if ($is_video): 
                                 $video_thumb_path = GalleryConfig::getVideoThumbnailPath($file['path'], $thumbs_dir);
                             ?>
@@ -1750,8 +2270,17 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                                     alt="<?= htmlspecialchars(basename($file['path'])) ?>"
                                     loading="lazy">
                                 <div class="play-button">▶</div>
-                            <?php else: ?>
-                                <img src="<?= $thumbs_dir . '/' . rawurlencode(basename($file['path'])) ?>" 
+                            <?php elseif ($is_pdf): ?>
+                                <!-- PDF thumbnail will be generated by JavaScript -->
+                                <canvas class="pdf-thumbnail" 
+                                    data-pdf-path="<?= htmlspecialchars($file['path']) ?>"
+                                    width="200" height="260"
+                                    alt="<?= htmlspecialchars(basename($file['path'])) ?>"></canvas>
+                                <div class="pdf-icon">📄</div>
+                            <?php else: 
+                                $image_thumb_path = GalleryConfig::getImageThumbnailPath($file['path'], $thumbs_dir);
+                            ?>
+                                <img src="<?= $thumbs_dir . '/' . rawurlencode(basename($image_thumb_path)) ?>" 
                                     alt="<?= htmlspecialchars(basename($file['path'])) ?>"
                                     loading="lazy">
                             <?php endif; ?>
@@ -1973,6 +2502,266 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 img.alt = normalizedPath.split('/').pop();
                 return img;
             }
+
+            // PDF handling utilities
+            createPDFElement(file) {
+                const pdfViewer = document.createElement('div');
+                pdfViewer.className = 'pdf-viewer';
+
+                // Create toolbar
+                const toolbar = document.createElement('div');
+                toolbar.className = 'pdf-toolbar';
+
+                // Page controls
+                const pageControls = document.createElement('div');
+                pageControls.className = 'pdf-controls';
+
+                const prevBtn = document.createElement('button');
+                prevBtn.className = 'pdf-button';
+                prevBtn.textContent = '← Previous';
+                prevBtn.disabled = true;
+
+                const nextBtn = document.createElement('button');
+                nextBtn.className = 'pdf-button';
+                nextBtn.textContent = 'Next →';
+
+                const pageInfo = document.createElement('div');
+                pageInfo.className = 'pdf-page-info';
+
+                const pageInput = document.createElement('input');
+                pageInput.type = 'number';
+                pageInput.className = 'pdf-page-input';
+                pageInput.value = '1';
+                pageInput.min = '1';
+
+                const pageTotal = document.createElement('span');
+                pageTotal.textContent = '/ 1';
+
+                pageInfo.appendChild(document.createTextNode('Page '));
+                pageInfo.appendChild(pageInput);
+                pageInfo.appendChild(pageTotal);
+
+                pageControls.appendChild(prevBtn);
+                pageControls.appendChild(nextBtn);
+                pageControls.appendChild(pageInfo);
+
+                // Zoom controls
+                const zoomControls = document.createElement('div');
+                zoomControls.className = 'pdf-zoom-controls';
+
+                const zoomOut = document.createElement('button');
+                zoomOut.className = 'pdf-button';
+                zoomOut.textContent = '−';
+
+                const zoomSelect = document.createElement('select');
+                zoomSelect.className = 'pdf-zoom-select';
+                ['50%', '75%', '100%', '125%', '150%', '200%', 'Fit Width', 'Fit Page'].forEach(zoom => {
+                    const option = document.createElement('option');
+                    option.value = zoom;
+                    option.textContent = zoom;
+                    if (zoom === '100%') option.selected = true;
+                    zoomSelect.appendChild(option);
+                });
+
+                const zoomIn = document.createElement('button');
+                zoomIn.className = 'pdf-button';
+                zoomIn.textContent = '+';
+
+                zoomControls.appendChild(zoomOut);
+                zoomControls.appendChild(zoomSelect);
+                zoomControls.appendChild(zoomIn);
+
+                toolbar.appendChild(pageControls);
+                toolbar.appendChild(zoomControls);
+
+                // Canvas container
+                const canvasContainer = document.createElement('div');
+                canvasContainer.className = 'pdf-canvas-container';
+
+                const loadingDiv = document.createElement('div');
+                loadingDiv.className = 'pdf-loading';
+                loadingDiv.textContent = 'Loading PDF...';
+                canvasContainer.appendChild(loadingDiv);
+
+                pdfViewer.appendChild(toolbar);
+                pdfViewer.appendChild(canvasContainer);
+
+                // Initialize PDF.js
+                this.initializePDF(file, canvasContainer, prevBtn, nextBtn, pageInput, pageTotal, zoomSelect, zoomOut, zoomIn);
+
+                return pdfViewer;
+            }
+
+            async initializePDF(file, container, prevBtn, nextBtn, pageInput, pageTotal, zoomSelect, zoomOut, zoomIn) {
+                try {
+                    // Configure PDF.js worker
+                    if (typeof pdfjsLib !== 'undefined') {
+                        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+                    }
+
+                    const normalizedPath = file.path.replace(/\\/g, '/');
+                    const pathParts = normalizedPath.split('/');
+                    const encodedFilename = encodeURIComponent(pathParts.pop());
+                    const pathDir = pathParts.join('/');
+                    const pdfUrl = pathDir + '/' + encodedFilename;
+
+                    console.log('Loading PDF:', pdfUrl);
+
+                    const pdf = await pdfjsLib.getDocument(pdfUrl).promise;
+                    
+                    let currentPage = 1;
+                    let currentScale = 1.0;
+                    let canvas = null;
+                    let renderingPage = false;
+
+                    // Update page info
+                    pageTotal.textContent = `/ ${pdf.numPages}`;
+                    pageInput.max = pdf.numPages;
+
+                    // Function to render a page
+                    const renderPage = async (pageNum, scale = currentScale) => {
+                        if (renderingPage) return;
+                        renderingPage = true;
+
+                        try {
+                            const page = await pdf.getPage(pageNum);
+                            
+                            // Create or reuse canvas
+                            if (!canvas) {
+                                canvas = document.createElement('canvas');
+                                canvas.className = 'pdf-canvas';
+                                container.innerHTML = '';
+                                container.appendChild(canvas);
+                            }
+
+                            const context = canvas.getContext('2d');
+                            
+                            // Calculate scale based on zoom selection
+                            let viewport;
+                            if (zoomSelect.value === 'Fit Width') {
+                                const containerWidth = container.clientWidth - 40; // Account for padding
+                                const pageViewport = page.getViewport({ scale: 1.0 });
+                                scale = containerWidth / pageViewport.width;
+                                viewport = page.getViewport({ scale });
+                            } else if (zoomSelect.value === 'Fit Page') {
+                                const containerWidth = container.clientWidth - 40;
+                                const containerHeight = container.clientHeight - 40;
+                                const pageViewport = page.getViewport({ scale: 1.0 });
+                                const scaleX = containerWidth / pageViewport.width;
+                                const scaleY = containerHeight / pageViewport.height;
+                                scale = Math.min(scaleX, scaleY);
+                                viewport = page.getViewport({ scale });
+                            } else {
+                                const zoomPercent = parseInt(zoomSelect.value) || 100;
+                                scale = zoomPercent / 100;
+                                viewport = page.getViewport({ scale });
+                            }
+
+                            currentScale = scale;
+
+                            // Set canvas dimensions
+                            canvas.width = viewport.width;
+                            canvas.height = viewport.height;
+
+                            // Render the page
+                            const renderContext = {
+                                canvasContext: context,
+                                viewport: viewport
+                            };
+
+                            await page.render(renderContext).promise;
+                            
+                            // Update controls
+                            prevBtn.disabled = pageNum <= 1;
+                            nextBtn.disabled = pageNum >= pdf.numPages;
+                            pageInput.value = pageNum;
+                            currentPage = pageNum;
+
+                            console.log(`Rendered PDF page ${pageNum}/${pdf.numPages}`);
+
+                        } catch (error) {
+                            console.error('Error rendering PDF page:', error);
+                            this.showPDFError(container, 'Failed to render PDF page');
+                        } finally {
+                            renderingPage = false;
+                        }
+                    };
+
+                    // Event listeners
+                    prevBtn.addEventListener('click', () => {
+                        if (currentPage > 1) {
+                            renderPage(currentPage - 1);
+                        }
+                    });
+
+                    nextBtn.addEventListener('click', () => {
+                        if (currentPage < pdf.numPages) {
+                            renderPage(currentPage + 1);
+                        }
+                    });
+
+                    pageInput.addEventListener('change', () => {
+                        const pageNum = parseInt(pageInput.value);
+                        if (pageNum >= 1 && pageNum <= pdf.numPages) {
+                            renderPage(pageNum);
+                        } else {
+                            pageInput.value = currentPage;
+                        }
+                    });
+
+                    zoomSelect.addEventListener('change', () => {
+                        renderPage(currentPage);
+                    });
+
+                    zoomOut.addEventListener('click', () => {
+                        const currentZoom = parseInt(zoomSelect.value) || 100;
+                        const newZoom = Math.max(25, currentZoom - 25);
+                        zoomSelect.value = newZoom + '%';
+                        renderPage(currentPage);
+                    });
+
+                    zoomIn.addEventListener('click', () => {
+                        const currentZoom = parseInt(zoomSelect.value) || 100;
+                        const newZoom = Math.min(300, currentZoom + 25);
+                        zoomSelect.value = newZoom + '%';
+                        renderPage(currentPage);
+                    });
+
+                    // Render first page
+                    await renderPage(1);
+
+                } catch (error) {
+                    console.error('Error loading PDF:', error);
+                    this.showPDFError(container, 'Failed to load PDF: ' + error.message, file);
+                }
+            }
+
+            showPDFError(container, message, file = null) {
+                container.innerHTML = '';
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'pdf-error';
+                
+                const errorMessage = document.createElement('div');
+                errorMessage.textContent = message;
+                errorDiv.appendChild(errorMessage);
+
+                if (file) {
+                    const downloadBtn = document.createElement('button');
+                    downloadBtn.className = 'retry-button';
+                    downloadBtn.textContent = 'Download PDF';
+                    downloadBtn.addEventListener('click', () => {
+                        const normalizedPath = file.path.replace(/\\/g, '/');
+                        const pathParts = normalizedPath.split('/');
+                        const encodedFilename = encodeURIComponent(pathParts.pop());
+                        const pathDir = pathParts.join('/');
+                        const downloadUrl = pathDir + '/' + encodedFilename;
+                        window.open(downloadUrl, '_blank');
+                    });
+                    errorDiv.appendChild(downloadBtn);
+                }
+
+                container.appendChild(errorDiv);
+            }
             
             // Metadata creation utilities
             createMetadata(file) {
@@ -2062,12 +2851,18 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 if (file.type && file.type.toString().includes('video')) {
                     const video = this.createVideoElement(file);
                     this.lightboxContent.appendChild(video);
+                } else if (file.type && file.type.toString().includes('application/pdf')) {
+                    // Handle PDF files specially
+                    const pdfViewer = this.createPDFElement(file);
+                    this.lightboxContent.appendChild(pdfViewer);
+                    // Don't add metadata for PDFs as they have their own toolbar
+                    return;
                 } else {
                     const img = this.createImageElement(file);
                     this.lightboxContent.appendChild(img);
                 }
                 
-                // Add metadata
+                // Add metadata (for non-PDF files)
                 const metadata = this.createMetadata(file);
                 this.lightboxContent.appendChild(metadata);
             }
@@ -2168,15 +2963,69 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             setupKeyboardEvents() {
                 document.addEventListener('keydown', (e) => {
                     if (this.lightbox.classList.contains('active')) {
+                        // Check if we're viewing a PDF
+                        const pdfViewer = this.lightboxContent.querySelector('.pdf-viewer');
+                        const activeElement = document.activeElement;
+                        
+                        // If PDF is active and user is typing in input field, don't interfere
+                        if (pdfViewer && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'SELECT')) {
+                            return;
+                        }
+                        
                         switch (e.key) {
                             case 'Escape':
                                 this.closeLightbox();
                                 break;
                             case 'ArrowLeft':
-                                this.showPrevious();
+                                if (pdfViewer) {
+                                    // For PDFs, left arrow navigates to previous page
+                                    const prevBtn = pdfViewer.querySelector('.pdf-button');
+                                    if (prevBtn && !prevBtn.disabled) {
+                                        prevBtn.click();
+                                    }
+                                } else {
+                                    // For images/videos, navigate to previous file
+                                    this.showPrevious();
+                                }
                                 break;
                             case 'ArrowRight':
-                                this.showNext();
+                                if (pdfViewer) {
+                                    // For PDFs, right arrow navigates to next page
+                                    const nextBtn = pdfViewer.querySelectorAll('.pdf-button')[1];
+                                    if (nextBtn && !nextBtn.disabled) {
+                                        nextBtn.click();
+                                    }
+                                } else {
+                                    // For images/videos, navigate to next file
+                                    this.showNext();
+                                }
+                                break;
+                            case 'ArrowUp':
+                                if (pdfViewer) {
+                                    // For PDFs, up arrow changes to previous file
+                                    this.showPrevious();
+                                }
+                                break;
+                            case 'ArrowDown':
+                                if (pdfViewer) {
+                                    // For PDFs, down arrow changes to next file
+                                    this.showNext();
+                                }
+                                break;
+                            case '+':
+                            case '=':
+                                if (pdfViewer) {
+                                    // Zoom in on PDF
+                                    const zoomIn = pdfViewer.querySelector('.pdf-zoom-controls .pdf-button:last-child');
+                                    if (zoomIn) zoomIn.click();
+                                }
+                                break;
+                            case '-':
+                                if (pdfViewer) {
+                                    // Zoom out on PDF
+                                    const zoomOut = pdfViewer.querySelector('.pdf-zoom-controls .pdf-button:first-child');
+                                    if (zoomOut) zoomOut.click();
+                                }
                                 break;
                         }
                     }
@@ -2324,9 +3173,109 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             window.location.href = currentUrl.toString();
         }
         
+        // PDF thumbnail generation using PDF.js
+        async function generatePDFThumbnails() {
+            if (typeof pdfjsLib === 'undefined') {
+                console.warn('PDF.js not loaded, skipping PDF thumbnail generation');
+                return;
+            }
+
+            // Find all PDF canvas elements
+            const pdfCanvases = document.querySelectorAll('.pdf-thumbnail');
+            
+            for (const canvas of pdfCanvases) {
+                try {
+                    // Check if already processed
+                    if (canvas.dataset.pdfProcessed === 'true') continue;
+                    
+                    const pdfPath = canvas.dataset.pdfPath;
+                    if (!pdfPath) continue;
+                    
+                    console.log('Generating PDF thumbnail for:', pdfPath);
+                    
+                    // First, draw a generic placeholder
+                    const context = canvas.getContext('2d');
+                    const canvasWidth = canvas.width;
+                    const canvasHeight = canvas.height;
+                    
+                    // Draw placeholder background
+                    context.fillStyle = '#f8f9fa';
+                    context.fillRect(0, 0, canvasWidth, canvasHeight);
+                    
+                    // Draw border
+                    context.strokeStyle = '#3498db';
+                    context.lineWidth = 2;
+                    context.strokeRect(1, 1, canvasWidth - 2, canvasHeight - 2);
+                    
+                    // Draw "PDF" text
+                    context.fillStyle = '#3498db';
+                    context.font = 'bold 24px Arial';
+                    context.textAlign = 'center';
+                    context.fillText('PDF', canvasWidth / 2, canvasHeight / 2 - 10);
+                    
+                    // Draw "Loading..." text
+                    context.fillStyle = '#6c757d';
+                    context.font = '12px Arial';
+                    context.fillText('Loading...', canvasWidth / 2, canvasHeight / 2 + 20);
+                    
+                    // Load the PDF and render the first page
+                    try {
+                        const loadingTask = pdfjsLib.getDocument(pdfPath);
+                        const pdf = await loadingTask.promise;
+                        
+                        // Get the first page
+                        const page = await pdf.getPage(1);
+                        
+                        // Calculate scale to fit the canvas while maintaining aspect ratio
+                        const viewport = page.getViewport({ scale: 1 });
+                        const scaleX = canvasWidth / viewport.width;
+                        const scaleY = canvasHeight / viewport.height;
+                        const scale = Math.min(scaleX, scaleY);
+                        
+                        const scaledViewport = page.getViewport({ scale });
+                        
+                        // Clear the canvas
+                        context.clearRect(0, 0, canvasWidth, canvasHeight);
+                        
+                        // Center the PDF page in the canvas
+                        const offsetX = (canvasWidth - scaledViewport.width) / 2;
+                        const offsetY = (canvasHeight - scaledViewport.height) / 2;
+                        
+                        // Fill background with white
+                        context.fillStyle = 'white';
+                        context.fillRect(offsetX, offsetY, scaledViewport.width, scaledViewport.height);
+                        
+                        // Render the page
+                        const renderContext = {
+                            canvasContext: context,
+                            viewport: scaledViewport,
+                            transform: [1, 0, 0, 1, offsetX, offsetY]
+                        };
+                        
+                        await page.render(renderContext).promise;
+                        
+                        console.log('PDF thumbnail generated successfully for:', pdfPath);
+                        
+                    } catch (pdfError) {
+                        console.warn('Failed to render PDF page, keeping placeholder:', pdfError);
+                        // Keep the placeholder that was already drawn
+                    }
+                    
+                    // Mark as processed
+                    canvas.dataset.pdfProcessed = 'true';
+                    
+                } catch (error) {
+                    console.warn('Failed to generate PDF thumbnail:', error);
+                }
+            }
+        }
+
         // Initialize gallery when DOM is ready
         document.addEventListener('DOMContentLoaded', function() {
             window.gallery = new InstantGallery();
+            
+            // Generate PDF thumbnails after initial load
+            setTimeout(generatePDFThumbnails, 500);
             
             // Close page selector when clicking outside
             document.addEventListener('click', function(e) {
