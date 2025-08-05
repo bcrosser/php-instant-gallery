@@ -3,7 +3,7 @@
 $base_dir = './pics';  // Base directory containing media files
 $thumbs_dir = './thumbs';  // Directory for generated thumbnails
 $thumb_width = 200;       // default thumbnail size
-
+$show_gps_coords = true;        // Show GPS coordinates in image details
 // Directory navigation links - add your custom links here
 $nav_links = [
     // Format: 'Display Name' => 'path/to/directory'
@@ -70,6 +70,16 @@ class GalleryConfig {
 
 // Utility functions for file grouping and sorting
 class GalleryUtils {
+    
+    public static function formatFileSize($bytes) {
+        if ($bytes < 1024 * 1024) {
+            return round($bytes / 1024, 1) . ' KB';
+        } else if ($bytes < 1024 * 1024 * 1024) {
+            return round($bytes / (1024 * 1024), 1) . ' MB';
+        } else {
+            return round($bytes / (1024 * 1024 * 1024), 1) . ' GB';
+        }
+    }
     
     public static function groupFilesBySize($files, $sort_direction = 'desc') {
         $grouped_files = [];
@@ -245,6 +255,82 @@ function get_video_creation_date($video_path) {
     return filemtime($video_path);
 }
 
+function gps2Num($coordPart) {
+    $parts = explode('/', $coordPart);
+    return count($parts) > 1 ? floatval($parts[0]) / floatval($parts[1]) : floatval($parts[0]);
+}
+
+// Function to extract GPS coordinates from EXIF data
+function get_gps_coordinates($exif) {
+    // Check if GPS data exists - it can be in either $exif['GPS'] or directly in $exif
+    $gps_lat = null;
+    $gps_lon = null;
+    $gps_lat_ref = null;
+    $gps_lon_ref = null;
+    
+    // First check if GPS data is in a GPS sub-array
+    if (isset($exif['GPS']) && 
+        isset($exif['GPS']['GPSLatitude']) && 
+        isset($exif['GPS']['GPSLongitude']) &&
+        isset($exif['GPS']['GPSLatitudeRef']) && 
+        isset($exif['GPS']['GPSLongitudeRef'])) {
+        
+        $gps_lat_ref = $exif['GPS']['GPSLatitudeRef'];
+        $gps_lat = $exif['GPS']['GPSLatitude'];
+        $gps_lon_ref = $exif['GPS']['GPSLongitudeRef'];
+        $gps_lon = $exif['GPS']['GPSLongitude'];
+    }
+    // Otherwise check if GPS data is directly in the main EXIF array
+    else if (isset($exif['GPSLatitude']) && 
+             isset($exif['GPSLongitude']) &&
+             isset($exif['GPSLatitudeRef']) && 
+             isset($exif['GPSLongitudeRef'])) {
+        
+        $gps_lat_ref = $exif['GPSLatitudeRef'];
+        $gps_lat = $exif['GPSLatitude'];
+        $gps_lon_ref = $exif['GPSLongitudeRef'];
+        $gps_lon = $exif['GPSLongitude'];
+    }
+    
+    // If no GPS data found, return null
+    if (!$gps_lat || !$gps_lon || !$gps_lat_ref || !$gps_lon_ref) {
+        return null;
+    }
+    
+    $GPSLatitudeRef = $gps_lat_ref;
+    $GPSLatitude = $gps_lat;
+    $GPSLongitudeRef = $gps_lon_ref;
+    $GPSLongitude = $gps_lon;
+    
+    // Convert GPS coordinates to decimal degrees
+    $lat_degrees = count($GPSLatitude) > 0 ? gps2Num($GPSLatitude[0]) : 0;
+    $lat_minutes = count($GPSLatitude) > 1 ? gps2Num($GPSLatitude[1]) : 0;
+    $lat_seconds = count($GPSLatitude) > 2 ? gps2Num($GPSLatitude[2]) : 0;
+    
+    $lon_degrees = count($GPSLongitude) > 0 ? gps2Num($GPSLongitude[0]) : 0;
+    $lon_minutes = count($GPSLongitude) > 1 ? gps2Num($GPSLongitude[1]) : 0;
+    $lon_seconds = count($GPSLongitude) > 2 ? gps2Num($GPSLongitude[2]) : 0;
+    
+    // Calculate decimal degrees
+    $latitude = $lat_degrees + ($lat_minutes / 60) + ($lat_seconds / 3600);
+    $longitude = $lon_degrees + ($lon_minutes / 60) + ($lon_seconds / 3600);
+    
+    // Apply direction (N/S for latitude, E/W for longitude)
+    if ($GPSLatitudeRef == 'S') {
+        $latitude = -$latitude;
+    }
+    if ($GPSLongitudeRef == 'W') {
+        $longitude = -$longitude;
+    }
+    
+    return array(
+        'latitude' => $latitude,
+        'longitude' => $longitude,
+        'lat_ref' => $GPSLatitudeRef,
+        'lon_ref' => $GPSLongitudeRef
+    );
+}
+
 // Fix issue in get_media_files function
 function get_media_files($dir) {
     $files = array();
@@ -278,13 +364,47 @@ function get_media_files($dir) {
                     
                     // Try to get EXIF data for images
                     if ($type == IMAGETYPE_JPEG || $type == IMAGETYPE_GIF || $type == IMAGETYPE_PNG) {
-                        $exif = @exif_read_data($path);
-                        if ($exif && isset($exif['DateTimeOriginal'])) {
-                            $taken = strtotime($exif['DateTimeOriginal']);
+                        $raw_exif = @exif_read_data($path);
+                        if ($raw_exif) {
+                            // Extract useful EXIF information
+                            $exif = array();
+                            
+                            // Basic camera info
+                            if (isset($raw_exif['Make'])) $exif['Camera Make'] = $raw_exif['Make'];
+                            if (isset($raw_exif['Model'])) $exif['Camera Model'] = $raw_exif['Model'];
+                            if (isset($raw_exif['DateTimeOriginal'])) {
+                                $exif['Date Taken'] = $raw_exif['DateTimeOriginal'];
+                                $taken = strtotime($raw_exif['DateTimeOriginal']);
+                            }
+                            
+                            // Camera settings
+                            if (isset($raw_exif['COMPUTED']['ApertureFNumber'])) $exif['Aperture'] = $raw_exif['COMPUTED']['ApertureFNumber'];
+                            if (isset($raw_exif['ExposureTime'])) $exif['Exposure Time'] = $raw_exif['ExposureTime'];
+                            if (isset($raw_exif['ISOSpeedRatings'])) $exif['ISO'] = $raw_exif['ISOSpeedRatings'];
+                            if (isset($raw_exif['FocalLength'])) $exif['Focal Length'] = $raw_exif['FocalLength'];
+                            if (isset($raw_exif['Flash'])) $exif['Flash'] = $raw_exif['Flash'];
+                            
+                            // Image dimensions
+                            if (isset($raw_exif['COMPUTED']['Width'])) $exif['Width'] = $raw_exif['COMPUTED']['Width'] . ' pixels';
+                            if (isset($raw_exif['COMPUTED']['Height'])) $exif['Height'] = $raw_exif['COMPUTED']['Height'] . ' pixels';
+                            
+                            // GPS data if available
+                            $gps_coords = get_gps_coordinates($raw_exif);
+                            if ($show_gps_coords && $gps_coords) {
+                                $exif['GPS Latitude'] = number_format($gps_coords['latitude'], 6) . '° ' . $gps_coords['lat_ref'];
+                                $exif['GPS Longitude'] = number_format($gps_coords['longitude'], 6) . '° ' . $gps_coords['lon_ref'];
+                                $exif['Google Maps Link'] = '<a href="https://maps.google.com/maps?q=' . $gps_coords['latitude'] . ',' . $gps_coords['longitude'] .'" >View on Maps</a>';
+                            }
+                            
+                            // Software/processing
+                            if (isset($raw_exif['Software'])) $exif['Software'] = $raw_exif['Software'];
+                        } else {
+                            $exif = null;
                         }
                     }
                 } catch (Exception $e) {
                     // Silently handle EXIF errors
+                    $exif = null;
                 }
             } else if (preg_match(GalleryConfig::VIDEO_EXTENSIONS, $filename)) {
                 // Set video type manually
@@ -305,7 +425,8 @@ function get_media_files($dir) {
                 'modified' => $file_info->getMTime(),
                 'taken' => $taken,
                 'size' => $file_info->getSize(),
-                'name' => $filename
+                'name' => $filename,
+                'exif' => isset($exif) ? $exif : null
             );
         }
     }
@@ -1087,6 +1208,84 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             border-radius: 3px;
             font-weight: bold;
         }
+        
+        /* Lightbox metadata styles */
+        .lightbox-metadata {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 0.9em;
+            max-width: 80%;
+            text-align: center;
+            z-index: 1003;
+        }
+        
+        .metadata-basic {
+            margin-bottom: 5px;
+        }
+        
+        .metadata-navigation {
+            font-size: 0.8em;
+            opacity: 0.8;
+            margin-top: 5px;
+        }
+        
+        .metadata-exif {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid rgba(255,255,255,0.3);
+            font-size: 0.8em;
+            opacity: 0.9;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        
+        .metadata-exif:hover {
+            opacity: 1;
+        }
+        
+        .exif-toggle {
+            background: rgba(255,255,255,0.1);
+            padding: 5px 10px;
+            border-radius: 4px;
+            text-align: center;
+            user-select: none;
+            transition: background 0.2s;
+        }
+        
+        .exif-toggle:hover {
+            background: rgba(255,255,255,0.2);
+        }
+        
+        .exif-details {
+            display: none;
+            margin-top: 8px;
+            text-align: left;
+            font-size: 0.75em;
+            background: rgba(0,0,0,0.6);
+            padding: 8px;
+            border-radius: 4px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        
+        .exif-details.show {
+            display: block;
+        }
+        
+        .exif-item {
+            margin-bottom: 3px;
+        }
+        
+        .arrow-icon {
+            display: inline-block;
+            margin: 0 3px;
+        }
     </style>
 </head>
 <body>
@@ -1290,7 +1489,11 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                         <?php endif; ?>
                     </div>
                     <div class="date-gallery">
-                        <?php foreach ($files as $file): ?>
+                        <?php foreach ($files as $file): 
+                            // Only display files that can be properly JSON encoded for lightbox
+                            $json_data = json_encode($file);
+                            if ($json_data !== false && $json_data !== null):
+                        ?>
                         <div class="item" data-index="<?= $global_index++ ?>">
                             <?php if (strpos($file['type'], 'video/') === 0): ?>
                                 <video poster="<?= $thumbs_dir . '/' . rawurlencode(basename($file['path'])) ?>">
@@ -1303,14 +1506,15 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                                     loading="lazy">
                             <?php endif; ?>
                             <div class="info">
-                                <div class="info-filename"><?= basename($file['path']) ?></div>
-                                Size: <?= round($file['size'] / 1024 / 1024, 1) ?> MB
-                                <?php if ($file['taken'] > 0): ?>
-                                    <br>Taken: <?= date('Y-m-d H:i', $file['taken']) ?>
-                                <?php endif; ?>
+                                <div class="info-filename"><?= htmlspecialchars($file['name']) ?></div>
+                                <div style="font-size: 0.8em; margin-top: 3px;">
+                                    Size: <?= GalleryUtils::formatFileSize($file['size']) ?><br>
+                                    Modified: <?= date('M j, Y H:i', $file['modified']) ?><br>
+                                    Taken: <?= date('M j, Y H:i', $file['taken']) ?>
+                                </div>
                             </div>
                         </div>
-                        <?php endforeach; ?>
+                        <?php endif; endforeach; ?>
                     </div>
                 </div>
             <?php endforeach; ?>
@@ -1366,9 +1570,25 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             $index = 0;
             foreach ($grouped_files as $group_name => $files): 
                 foreach ($files as $file): 
+                    // Enhance file data with formatted fields for JavaScript
+                    $enhanced_file = $file;
+                    $enhanced_file['formatted_size'] = GalleryUtils::formatFileSize($file['size']);
+                    $enhanced_file['formatted_modified_date'] = date('M j, Y H:i', $file['modified']);
+                    $enhanced_file['formatted_taken_date'] = date('M j, Y H:i', $file['taken']);
+                    
+                    // Rename 'exif' to 'exif_data' for JavaScript consistency
+                    if (isset($file['exif']) && $file['exif']) {
+                        $enhanced_file['exif_data'] = $file['exif'];
+                    }
+                    unset($enhanced_file['exif']); // Remove old field
+                    
+                    // Only include files that can be properly JSON encoded (matching HTML generation logic)
+                    $json_data = json_encode($enhanced_file);
+                    if ($json_data !== false && $json_data !== null):
             ?>
-                allMediaFiles[<?= $index++ ?>] = <?= json_encode($file) ?>;
+                allMediaFiles[<?= $index++ ?>] = <?= $json_data ?>;
             <?php 
+                    endif;
                 endforeach; 
             endforeach; 
             ?>
@@ -1398,6 +1618,7 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             const items = document.querySelectorAll('.item');
             
             let currentIndex = 0;
+            let exifToggleExpanded = false; // Track EXIF toggle state across images
             
             // Function to show media at specific index
             function showMedia(index) {
@@ -1443,12 +1664,74 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                     img.alt = normalizedPath.split('/').pop();
                     lightboxContent.appendChild(img);
                 }
+                
+                // Create metadata display
+                const metadataDiv = document.createElement('div');
+                metadataDiv.className = 'lightbox-metadata';
+                
+                // Basic metadata
+                const filename = file.path.split('/').pop().split('\\').pop();
+                const basicMetadata = document.createElement('div');
+                basicMetadata.className = 'metadata-basic';
+                basicMetadata.innerHTML = `
+                    <span class="filename">${filename}</span>
+                    <span class="filesize">${file.formatted_size || file.size}</span>
+                    ${file.formatted_modified_date ? `<span class="modified-date">Modified: ${file.formatted_modified_date}</span>` : ''}
+                    ${file.formatted_taken_date ? `<span class="taken-date">Taken: ${file.formatted_taken_date}</span>` : ''}
+                `;
+                metadataDiv.appendChild(basicMetadata);
+                
+                // Navigation instructions
+                const navInstructions = document.createElement('div');
+                navInstructions.className = 'nav-instructions';
+                navInstructions.innerHTML = 'Use ← → arrow keys or swipe left/right to navigate';
+                metadataDiv.appendChild(navInstructions);
+                
+                // EXIF data (if available)
+                if (file.exif_data && Object.keys(file.exif_data).length > 0) {
+                    const exifDiv = document.createElement('div');
+                    exifDiv.className = 'metadata-exif';
+                    
+                    const exifToggle = document.createElement('div');
+                    exifToggle.className = 'exif-toggle';
+                    exifToggle.innerHTML = exifToggleExpanded ? 'EXIF Data ▲' : 'EXIF Data ▼';
+                    exifToggle.addEventListener('click', function() {
+                        const exifDetails = exifDiv.querySelector('.exif-details');
+                        const isCurrentlyExpanded = exifDetails.style.display !== 'none';
+                        exifDetails.style.display = isCurrentlyExpanded ? 'none' : 'block';
+                        exifToggle.innerHTML = isCurrentlyExpanded ? 'EXIF Data ▼' : 'EXIF Data ▲';
+                        // Update the global state when user clicks toggle
+                        exifToggleExpanded = !isCurrentlyExpanded;
+                    });
+                    
+                    const exifDetails = document.createElement('div');
+                    exifDetails.className = 'exif-details';
+                    // Set initial display state based on toggle state
+                    exifDetails.style.display = exifToggleExpanded ? 'block' : 'none';
+                    
+                    // Format EXIF data
+                    let exifContent = '';
+                    for (const [key, value] of Object.entries(file.exif_data)) {
+                        if (value && value !== '' && value !== 'Unknown') {
+                            exifContent += `<div class="exif-item"><strong>${key}:</strong> ${value}</div>`;
+                        }
+                    }
+                    exifDetails.innerHTML = exifContent;
+                    
+                    exifDiv.appendChild(exifToggle);
+                    exifDiv.appendChild(exifDetails);
+                    metadataDiv.appendChild(exifDiv);
+                }
+                
+                lightboxContent.appendChild(metadataDiv);
             }
             
             // Open lightbox when clicking an item
             items.forEach(item => {
                 item.addEventListener('click', function() {
                     currentIndex = parseInt(this.getAttribute('data-index'));
+                    // Reset EXIF toggle state when opening new lightbox session
+                    exifToggleExpanded = false;
                     showMedia(currentIndex);
                     lightbox.classList.add('active');
                 });
