@@ -1,4 +1,9 @@
 <?php
+// Debug Configuration
+$debug_mode = false;  // Set to true to enable error logging, false to disable
+                      // When true: all debug_log() messages will be written to error log
+                      // When false: all debug_log() messages will be silently ignored
+
 // Configuration
 $base_dir = './pics';  // Base directory containing media files
 $thumbs_dir = './thumbs';  // Directory for generated thumbnails
@@ -20,6 +25,14 @@ $external_links = [
     'Google' => 'https://google.com',
     // Add more links as needed
 ];
+
+// Debug logging wrapper function
+function debug_log($message) {
+    global $debug_mode;
+    if ($debug_mode) {
+        error_log($message);
+    }
+}
 
 // Constants and configuration arrays
 class GalleryConfig {
@@ -132,7 +145,7 @@ class GalleryConfig {
         // Try to get image dimensions for supported formats
         $dims = @getimagesize($source);
         if (!$dims) {
-            error_log("Could not get image dimensions for: " . $source);
+            debug_log("Could not get image dimensions for: " . $source);
             return false;
         }
         
@@ -192,7 +205,7 @@ class GalleryConfig {
         }
         
         if (!$img) {
-            error_log("Could not create image resource for: " . $source);
+            debug_log("Could not create image resource for: " . $source);
             return false;
         }
         
@@ -247,7 +260,7 @@ class GalleryConfig {
         $success = imagejpeg($img, $destination, 85);
         imagedestroy($img);
         
-        error_log("PDF placeholder created for PDF.js processing: " . $destination);
+        debug_log("PDF placeholder created for PDF.js processing: " . $destination);
         return $success;
     }
     
@@ -267,9 +280,9 @@ class GalleryConfig {
                 $info['pages'] = $imagick->getNumberImages();
                 $imagick->clear();
                 $imagick->destroy();
-                error_log("PDF page count detected via Imagick: " . $info['pages']);
+                debug_log("PDF page count detected via Imagick: " . $info['pages']);
             } catch (Exception $e) {
-                error_log("Failed to get PDF page count via Imagick: " . $e->getMessage());
+                debug_log("Failed to get PDF page count via Imagick: " . $e->getMessage());
             }
         }
         
@@ -281,16 +294,16 @@ class GalleryConfig {
                     // Look for /Count in the PDF structure
                     if (preg_match('/\/Count\s+(\d+)/', $content, $matches)) {
                         $info['pages'] = (int)$matches[1];
-                        error_log("PDF page count detected via manual parsing: " . $info['pages']);
+                        debug_log("PDF page count detected via manual parsing: " . $info['pages']);
                     }
                     // Alternative: count page objects
                     elseif (preg_match_all('/\/Type\s*\/Page[^s]/', $content, $matches)) {
                         $info['pages'] = count($matches[0]);
-                        error_log("PDF page count detected via page object counting: " . $info['pages']);
+                        debug_log("PDF page count detected via page object counting: " . $info['pages']);
                     }
                 }
             } catch (Exception $e) {
-                error_log("Failed to manually parse PDF: " . $e->getMessage());
+                debug_log("Failed to manually parse PDF: " . $e->getMessage());
             }
         }
         
@@ -315,11 +328,11 @@ class GalleryConfig {
                 $imagick->destroy();
                 
                 if ($success) {
-                    error_log("SVG thumbnail created successfully with Imagick: " . $destination);
+                    debug_log("SVG thumbnail created successfully with Imagick: " . $destination);
                     return true;
                 }
             } catch (Exception $e) {
-                error_log("Imagick SVG processing failed: " . $e->getMessage());
+                debug_log("Imagick SVG processing failed: " . $e->getMessage());
             }
         }
         
@@ -344,7 +357,7 @@ class GalleryConfig {
         $success = imagejpeg($img, $destination, 85);
         imagedestroy($img);
         
-        error_log("SVG placeholder thumbnail created: " . $destination);
+        debug_log("SVG placeholder thumbnail created: " . $destination);
         return $success;
     }
     
@@ -381,23 +394,23 @@ class GalleryConfig {
                         $width = round($thumb_width * $aspect_ratio);
                     }
                     
-                    error_log("Video dimensions: {$video_width}x{$video_height}, aspect ratio: {$aspect_ratio}, thumbnail: {$width}x{$height}");
+                    debug_log("Video dimensions: {$video_width}x{$video_height}, aspect ratio: {$aspect_ratio}, thumbnail: {$width}x{$height}");
                 }
             }
         }
         
         // Extract a single frame at 1 second mark and save as JPEG
         $command = "\"{$ffmpeg_cmd}\" -i \"{$source}\" -ss 00:00:01 -vframes 1 -s {$width}x{$height} -f image2 \"{$destination}\"";
-        error_log("Running ffmpeg command: " . $command);
+        debug_log("Running ffmpeg command: " . $command);
         exec($command, $output, $return_code);
-        error_log("FFmpeg return code: " . $return_code . ", output: " . implode("\n", $output));
+        debug_log("FFmpeg return code: " . $return_code . ", output: " . implode("\n", $output));
         
         // Check if thumbnail was created, if not try again with different timestamp
         if (!file_exists($destination) || filesize($destination) == 0) {
             $command = "\"{$ffmpeg_cmd}\" -i \"{$source}\" -ss 00:00:10 -vframes 1 -s {$width}x{$height} -f image2 \"{$destination}\"";
-            error_log("Retry ffmpeg command: " . $command);
+            debug_log("Retry ffmpeg command: " . $command);
             exec($command, $output2, $return_code2);
-            error_log("FFmpeg retry return code: " . $return_code2 . ", output: " . implode("\n", $output2));
+            debug_log("FFmpeg retry return code: " . $return_code2 . ", output: " . implode("\n", $output2));
         }
         
         // If still fails, create an empty placeholder
@@ -426,13 +439,13 @@ class GalleryConfig {
         
         // Try to extract embedded album art directly to destination
         $command = "\"{$ffmpeg_cmd}\" -i \"{$source}\" \"{$destination}\" 2>&1";
-        error_log("Running ffmpeg command for audio thumbnail: " . $command);
+        debug_log("Running ffmpeg command for audio thumbnail: " . $command);
         
         exec($command, $output, $return_code);
         $output_text = implode("\n", $output);
         
-        error_log("FFmpeg audio thumbnail return code: " . $return_code);
-        error_log("FFmpeg audio thumbnail output: " . $output_text);
+        debug_log("FFmpeg audio thumbnail return code: " . $return_code);
+        debug_log("FFmpeg audio thumbnail output: " . $output_text);
         
         // Check if thumbnail was successfully created
         if ($return_code === 0 && file_exists($destination) && filesize($destination) > 0) {
@@ -443,11 +456,11 @@ class GalleryConfig {
             if ($success && file_exists($temp_resized)) {
                 // Replace original with resized version
                 rename($temp_resized, $destination);
-                error_log("Audio thumbnail created and resized from embedded album art: " . $destination);
+                debug_log("Audio thumbnail created and resized from embedded album art: " . $destination);
                 return true;
             } else {
                 // If resize failed, keep the original extracted image
-                error_log("Audio thumbnail created from embedded album art (original size): " . $destination);
+                debug_log("Audio thumbnail created from embedded album art (original size): " . $destination);
                 return true;
             }
         }
@@ -456,13 +469,13 @@ class GalleryConfig {
         if (strpos($output_text, 'does not contain any stream') !== false || 
             strpos($output_text, 'No video stream') !== false ||
             $return_code !== 0) {
-            error_log("No embedded album art found in audio file, creating preset thumbnail");
+            debug_log("No embedded album art found in audio file, creating preset thumbnail");
             // If no album art found or extraction failed, create a preset thumbnail
             return self::createPresetAudioThumbnail($source, $destination, $width);
         }
         
         // Fallback to preset thumbnail for any other errors
-        error_log("FFmpeg extraction failed, creating preset thumbnail");
+        debug_log("FFmpeg extraction failed, creating preset thumbnail");
         return self::createPresetAudioThumbnail($source, $destination, $width);
     }
     
@@ -535,7 +548,7 @@ class GalleryConfig {
         $success = imagejpeg($img, $destination, 85);
         imagedestroy($img);
         
-        error_log("Audio preset thumbnail created: " . $destination);
+        debug_log("Audio preset thumbnail created: " . $destination);
         return $success;
     }
     
@@ -558,24 +571,24 @@ class GalleryConfig {
         
         // Get both format and stream metadata
         $command = "\"{$ffprobe_cmd}\" -v quiet -print_format json -show_format -show_streams \"{$video_path}\"";
-        error_log("Running ffprobe command: " . $command);
+        debug_log("Running ffprobe command: " . $command);
         $output = shell_exec($command);
-        error_log("FFprobe output length: " . strlen($output) . " characters");
+        debug_log("FFprobe output length: " . strlen($output) . " characters");
         
         if (empty($output)) {
-            error_log("FFprobe returned empty output for: " . $video_path);
+            debug_log("FFprobe returned empty output for: " . $video_path);
             return null;
         }
         
         $metadata = json_decode($output, true);
         
         if (empty($metadata)) {
-            error_log("Failed to decode JSON from ffprobe output for: " . $video_path);
-            error_log("Raw output: " . $output);
+            debug_log("Failed to decode JSON from ffprobe output for: " . $video_path);
+            debug_log("Raw output: " . $output);
             return null;
         }
         
-        error_log("Successfully decoded ffprobe metadata for: " . $video_path);
+        debug_log("Successfully decoded ffprobe metadata for: " . $video_path);
         
         $extracted_metadata = array();
         $creation_date = null;
@@ -696,22 +709,22 @@ class GalleryConfig {
         
         // Get both format and stream metadata for audio
         $command = "\"{$ffprobe_cmd}\" -v quiet -print_format json -show_format -show_streams \"{$audio_path}\"";
-        error_log("Running ffprobe command for audio: " . $command);
+        debug_log("Running ffprobe command for audio: " . $command);
         $output = shell_exec($command);
         
         if (empty($output)) {
-            error_log("FFprobe returned empty output for audio: " . $audio_path);
+            debug_log("FFprobe returned empty output for audio: " . $audio_path);
             return null;
         }
         
         $metadata = json_decode($output, true);
         
         if (empty($metadata)) {
-            error_log("Failed to decode JSON from ffprobe output for audio: " . $audio_path);
+            debug_log("Failed to decode JSON from ffprobe output for audio: " . $audio_path);
             return null;
         }
         
-        error_log("Successfully decoded ffprobe metadata for audio: " . $audio_path);
+        debug_log("Successfully decoded ffprobe metadata for audio: " . $audio_path);
         
         $extracted_metadata = array();
         $creation_date = null;
@@ -904,14 +917,14 @@ class GalleryConfig {
         $ffprobe_test = shell_exec("\"{$ffprobe_cmd}\" -version 2>&1");
         $ffprobe_works = strpos($ffprobe_test, 'ffprobe version') !== false;
         
-        error_log("FFmpeg test (cmd: {$ffmpeg_cmd}): " . ($ffmpeg_works ? 'WORKING' : 'FAILED'));
-        error_log("FFprobe test (cmd: {$ffprobe_cmd}): " . ($ffprobe_works ? 'WORKING' : 'FAILED'));
+        debug_log("FFmpeg test (cmd: {$ffmpeg_cmd}): " . ($ffmpeg_works ? 'WORKING' : 'FAILED'));
+        debug_log("FFprobe test (cmd: {$ffprobe_cmd}): " . ($ffprobe_works ? 'WORKING' : 'FAILED'));
         
         if (!$ffmpeg_works) {
-            error_log("FFmpeg output: " . $ffmpeg_test);
+            debug_log("FFmpeg output: " . $ffmpeg_test);
         }
         if (!$ffprobe_works) {
-            error_log("FFprobe output: " . $ffprobe_test);
+            debug_log("FFprobe output: " . $ffprobe_test);
         }
         
         return ['ffmpeg' => $ffmpeg_works, 'ffprobe' => $ffprobe_works];
@@ -1373,11 +1386,11 @@ function get_media_files($dir) {
                     $exif = $video_metadata['metadata'];
                     
                     // Debug: Log video metadata extraction
-                    error_log("Video metadata for {$filename}: " . print_r($video_metadata, true));
+                    debug_log("Video metadata for {$filename}: " . print_r($video_metadata, true));
                 } else {
                     $taken = 0;
                     $exif = null;
-                    error_log("No video metadata found for {$filename}");
+                    debug_log("No video metadata found for {$filename}");
                 }
             } else if (GalleryConfig::isAudio($filename)) {
                 // Use centralized audio MIME type detection
@@ -1390,11 +1403,11 @@ function get_media_files($dir) {
                     $exif = $audio_metadata['metadata'];
                     
                     // Debug: Log audio metadata extraction
-                    error_log("Audio metadata for {$filename}: " . print_r($audio_metadata, true));
+                    debug_log("Audio metadata for {$filename}: " . print_r($audio_metadata, true));
                 } else {
                     $taken = 0;
                     $exif = null;
-                    error_log("No audio metadata found for {$filename}");
+                    debug_log("No audio metadata found for {$filename}");
                 }
             }
             
@@ -1424,7 +1437,7 @@ $media_files = get_media_files($current_dir);
 // Test FFmpeg tools availability
 $ffmpeg_status = GalleryConfig::testFFmpegTools();
 if (!$ffmpeg_status['ffmpeg'] || !$ffmpeg_status['ffprobe']) {
-    error_log("WARNING: FFmpeg tools not working properly. Video thumbnails and metadata will not work.");
+    debug_log("WARNING: FFmpeg tools not working properly. Video thumbnails and metadata will not work.");
 }
 
 // Get sort and filter parameters from URL
@@ -1573,15 +1586,15 @@ foreach ($paginated_files as $file) {
         continue;
     }
     
-    error_log("Processing file: {$file['name']}, is_video: " . ($is_video ? 'true' : 'false') . ", is_image: " . ($is_image ? 'true' : 'false') . ", thumb_path: {$thumb_path}");
+    debug_log("Processing file: {$file['name']}, is_video: " . ($is_video ? 'true' : 'false') . ", is_image: " . ($is_image ? 'true' : 'false') . ", thumb_path: {$thumb_path}");
     
     // Skip if thumbnail already exists
     if (file_exists($thumb_path)) {
-        error_log("Thumbnail already exists: {$thumb_path}");
+        debug_log("Thumbnail already exists: {$thumb_path}");
         continue;
     }
     
-    error_log("Creating thumbnail for: {$file['path']} -> {$thumb_path}");
+    debug_log("Creating thumbnail for: {$file['path']} -> {$thumb_path}");
     
     // Handle different file types
     if ($is_video) {
@@ -1608,9 +1621,9 @@ foreach ($paginated_files as $file) {
     
     // Check if thumbnail was successfully created
     if (file_exists($thumb_path)) {
-        error_log("Thumbnail successfully created: {$thumb_path}");
+        debug_log("Thumbnail successfully created: {$thumb_path}");
     } else {
-        error_log("FAILED to create thumbnail: {$thumb_path}");
+        debug_log("FAILED to create thumbnail: {$thumb_path}");
     }
 }
 
@@ -2950,9 +2963,9 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                         if (isset($file['exif']) && $file['exif']) {
                             $enhanced_file['exif_data'] = $file['exif'];
                             // Debug: Log EXIF data transfer
-                            error_log("Transferring EXIF data for {$file['name']}: " . print_r($file['exif'], true));
+                            debug_log("Transferring EXIF data for {$file['name']}: " . print_r($file['exif'], true));
                         } else {
-                            error_log("No EXIF data to transfer for {$file['name']}");
+                            debug_log("No EXIF data to transfer for {$file['name']}");
                         }
                         unset($enhanced_file['exif']); // Remove old field
                         
