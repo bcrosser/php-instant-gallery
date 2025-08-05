@@ -28,6 +28,8 @@ It's still a work in progress, and I'll add more documentation once I have produ
 
 - Lightbox with Metadata Open - ![Lightbox with Metadata Open](https://github.com/bcrosser/php-instant-gallery/blob/master/screenshots/instant-gallery-5.png)
 
+- Audio Player - ![Audio Player](https://github.com/bcrosser/php-instant-gallery/blob/master/screenshots/instant-gallery-6.png)
+
 ## How to use:
 1. Copy index.php to directory above where gallery of media is.
 2. Change `$base_dir` to media directory
