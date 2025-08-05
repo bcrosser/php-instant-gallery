@@ -13,6 +13,7 @@ It's still a work in progress, and I'll add more documentation once I have produ
 - Integrated video and audio player
 - Integrated PDF viewer
 - Visiting gallery autogenerates thumbnails for all images, videos, audio and PDF in gallery directory
+- Dynamic pagination
 - Resizeable thumbnail size reorders images
 - Sort media Ascending/Descending by: modified date, date taken, size, name
 - Filter Media by file type and grouping
