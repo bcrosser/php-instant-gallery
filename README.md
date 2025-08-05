@@ -33,6 +33,8 @@ It's still a work in progress, and I'll add more documentation once I have produ
 
 - Audio Player - ![Audio Player](https://github.com/bcrosser/php-instant-gallery/blob/master/screenshots/instant-gallery-6.png)
 
+- PDF Viewer - ![PDF Viewer](https://github.com/bcrosser/php-instant-gallery/blob/master/screenshots/instant-gallery-7.png)
+
 ## How to use:
 1. Copy index.php to directory above where gallery of media is.
 2. Change `$base_dir` to media directory
