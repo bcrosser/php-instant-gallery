@@ -1216,7 +1216,11 @@ class GalleryConfig {
                 if ($metadata !== null) {
                     debug_log("Loaded cached metadata for {$filename}");
                     return $metadata;
+                } else {
+                    debug_log("Failed to parse JSON from cache file: {$cache_path}");
                 }
+            } else {
+                debug_log("Cache file is older than original file for {$filename}");
             }
         }
         
@@ -1630,20 +1634,34 @@ function get_media_files($dir) {
                 // Use centralized video MIME type detection
                 $type = GalleryConfig::getVideoMimeType($filename);
                 
-                // Skip metadata extraction for performance - will be loaded via AJAX
-                $taken = $file_info->getMTime(); // Use file modification time as fallback
-                $exif = null; // Will be loaded lazily
-                
-                debug_log("Video file detected, metadata will be loaded lazily: {$filename}");
+                // Try to load cached metadata first
+                $cached_metadata = GalleryConfig::getCachedMetadata($filename, $path);
+                if ($cached_metadata && isset($cached_metadata['creation_date'])) {
+                    $taken = $cached_metadata['creation_date'];
+                    $exif = $cached_metadata['metadata'] ?? null;
+                    debug_log("Loaded cached metadata for video: {$filename}");
+                } else {
+                    // Skip metadata extraction for performance - will be loaded via AJAX
+                    $taken = $file_info->getMTime(); // Use file modification time as fallback
+                    $exif = null; // Will be loaded lazily
+                    debug_log("Video file detected, no cached metadata found: {$filename}");
+                }
             } else if (GalleryConfig::isAudio($filename)) {
                 // Use centralized audio MIME type detection
                 $type = GalleryConfig::getAudioMimeType($filename);
                 
-                // Skip metadata extraction for performance - will be loaded via AJAX
-                $taken = $file_info->getMTime(); // Use file modification time as fallback
-                $exif = null; // Will be loaded lazily
-                
-                debug_log("Audio file detected, metadata will be loaded lazily: {$filename}");
+                // Try to load cached metadata first
+                $cached_metadata = GalleryConfig::getCachedMetadata($filename, $path);
+                if ($cached_metadata && isset($cached_metadata['creation_date'])) {
+                    $taken = $cached_metadata['creation_date'];
+                    $exif = $cached_metadata['metadata'] ?? null;
+                    debug_log("Loaded cached metadata for audio: {$filename}");
+                } else {
+                    // Skip metadata extraction for performance - will be loaded via AJAX
+                    $taken = $file_info->getMTime(); // Use file modification time as fallback
+                    $exif = null; // Will be loaded lazily
+                    debug_log("Audio file detected, no cached metadata found: {$filename}");
+                }
             }
             
             // If no taken date found, use modification time
@@ -2388,20 +2406,99 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             font-weight: bold;
         }
 
-        /* Lightbox Metadata */
+        /* Auto-Play Toggle Control */
+        .autoplay-control {
+            margin-top: 5px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 24px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: var(--sidebar-item);
+            transition: var(--transition);
+            border-radius: 24px;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: var(--transition);
+            border-radius: 50%;
+        }
+
+        .toggle-switch input:checked + .toggle-slider {
+            background-color: var(--primary-color);
+        }
+
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(26px);
+        }
+
+        .toggle-label {
+            font-size: 0.85em;
+            opacity: 0.9;
+            user-select: none;
+        }
+
+        /* Lightbox Metadata - Compact right-side panel */
         .lightbox-metadata {
             position: fixed;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: rgba(0,0,0,0.8);
+            top: 50%;
+            right: 140px; /* Move away from navigation arrow */
+            transform: translateY(-50%);
+            background: rgba(0,0,0,0.85);
             color: white;
-            padding: 10px 20px;
-            border-radius: 8px;
-            font-size: 0.9em;
-            max-width: 80%;
-            text-align: center;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.75em;
+            max-width: 320px; /* Wider panel */
+            min-width: 280px; /* Wider minimum */
+            text-align: left;
             z-index: 1003;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            border: 1px solid rgba(255,255,255,0.1);
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        
+        /* Responsive adjustments for smaller screens */
+        @media (max-width: 768px) {
+            .lightbox-metadata {
+                max-width: 240px;
+                min-width: 200px;
+                right: 90px; /* Adjust for mobile arrow spacing */
+                font-size: 0.7em;
+            }
+            
+            .metadata-toggle-compact {
+                right: 90px; /* Match panel positioning */
+                bottom: 60px;
+            }
         }
 
         .metadata-basic { margin-bottom: 5px; }
@@ -2793,32 +2890,68 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             margin-top: 10px;
         }
         
+        /* Compact metadata toggle at bottom (when panel is closed) */
+        .metadata-toggle-compact {
+            position: fixed;
+            bottom: 70px;
+            right: 120px; /* Move away from navigation arrow */
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 4px 8px;
+            cursor: pointer;
+            border-radius: 3px;
+            font-size: 10px;
+            user-select: none;
+            text-align: center;
+            border: 1px solid rgba(255,255,255,0.2);
+            z-index: 1003;
+            white-space: nowrap;
+        }
+        
+        .metadata-toggle-compact:hover {
+            background: rgba(0, 0, 0, 0.9);
+            border-color: rgba(255,255,255,0.4);
+        }
+        
+        .metadata-toggle-compact.metadata-loading {
+            background: rgba(52, 152, 219, 0.8);
+            animation: pulse 1.5s ease-in-out infinite alternate;
+        }
+        
+        /* Main metadata toggle (in right panel) */
         .metadata-toggle {
             background: rgba(0, 0, 0, 0.7);
             color: white;
-            padding: 8px 12px;
+            padding: 4px 8px;
             cursor: pointer;
-            border-radius: 4px;
-            margin-bottom: 8px;
-            font-size: 14px;
+            border-radius: 3px;
+            margin-bottom: 4px;
+            font-size: 11px;
             user-select: none;
+            text-align: center;
+            border: 1px solid rgba(255,255,255,0.2);
         }
         
         .metadata-toggle:hover {
-            background: rgba(0, 0, 0, 0.8);
+            background: rgba(0, 0, 0, 0.85);
+            border-color: rgba(255,255,255,0.4);
         }
         
         .metadata-content {
-            background: rgba(0, 0, 0, 0.8);
+            background: rgba(0, 0, 0, 0.85);
             color: white;
-            padding: 12px;
+            padding: 8px 10px;
             border-radius: 4px;
-            font-size: 13px;
-            line-height: 1.4;
+            font-size: 11px;
+            line-height: 1.3;
+            max-height: 60vh;
+            overflow-y: auto;
+            border: 1px solid rgba(255,255,255,0.1);
         }
         
         .metadata-content div {
-            margin-bottom: 6px;
+            margin-bottom: 3px;
+            word-wrap: break-word;
         }
         
         .metadata-content div:last-child {
@@ -2941,6 +3074,17 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                         <span id="sizeValue"><?= $thumb_width ?>px</span>
                         <span>Large</span>
                     </div>
+                </div>
+            </div>
+            
+            <div class="group">
+                <span class="group-label">Auto-Play Media</span>
+                <div class="autoplay-control">
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="autoPlayToggle">
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <span class="toggle-label">Auto-play videos and audio</span>
                 </div>
             </div>
         </div>
@@ -3241,6 +3385,8 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 this.allMediaFiles = [];
                 this.currentIndex = 0;
                 this.exifToggleExpanded = false;
+                this.metadataPanelVisible = true; // Track metadata panel state - default to open
+                this.autoPlayEnabled = false; // Track auto-play state - default to off
                 this.lightbox = null;
                 this.lightboxContent = null;
                 this.items = null;
@@ -3254,6 +3400,7 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 this.setupEventListeners();
                 this.setupURLParameters();
                 this.setupThumbnailSizeControl();
+                this.setupAutoPlayToggle();
                 
                 // Start background metadata loading for video/audio files
                 this.startBackgroundMetadataLoading();
@@ -3328,6 +3475,13 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 video.preload = 'metadata';
                 video.style.maxWidth = '100%';
                 video.style.maxHeight = '85vh';
+                
+                // Apply auto-play if enabled
+                if (this.autoPlayEnabled) {
+                    video.autoplay = true;
+                    video.muted = false; // Required for autoplay in most browsers
+                    debugLog('Auto-play enabled for video:', file.name);
+                }
                 
                 debugLog('Creating video element for:', file.name);
                 
@@ -3666,44 +3820,108 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 debugLog('EXIF data available:', !!file.exif_data);
                 debugLog('EXIF data content:', file.exif_data);
                 
-                const metadataDiv = document.createElement('div');
-                metadataDiv.className = 'lightbox-metadata';
-                
-                // Basic metadata
                 const filename = file.path.split('/').pop().split('\\').pop();
-                const basicMetadata = document.createElement('div');
-                basicMetadata.className = 'metadata-basic';
-                basicMetadata.innerHTML = `
-                    <span class="filename">${filename}</span>
-                    <span class="filesize">${file.formatted_size || file.size}</span>
-                    ${file.formatted_modified_date ? `<span class="modified-date">Modified: ${file.formatted_modified_date}</span>` : ''}
-                    ${file.formatted_taken_date ? `<span class="taken-date filesize">Taken: ${file.formatted_taken_date}</span>` : ''}
-                `;
-                metadataDiv.appendChild(basicMetadata);
                 
-                // Navigation instructions
+                // Create top metadata bar (above picture)
+                const topMetadata = document.createElement('div');
+                topMetadata.className = 'lightbox-metadata-top';
+                topMetadata.style.cssText = `
+                    position: absolute;
+                    left: 20px;
+                    right: 20px;
+                    background: rgba(0, 0, 0, 0.8);
+                    color: white;
+                    padding: 10px 15px;
+                    border-radius: 6px;
+                    font-size: 12px;
+                    z-index: 1002;
+                    backdrop-filter: blur(10px);
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    flex-wrap: wrap;
+                `;
+                
+                // Basic info section
+                const basicInfo = document.createElement('div');
+                basicInfo.className = 'metadata-basic-info';
+                basicInfo.style.cssText = 'flex: 1; min-width: 200px;';
+                basicInfo.innerHTML = `
+                    <div style="font-weight: bold; margin-bottom: 4px; font-size: 13px;">${filename}</div>
+                    <div style="display: flex; gap: 15px; flex-wrap: wrap; font-size: 11px; opacity: 0.9;">
+                        <span>${file.formatted_size || file.size}</span>
+                        ${file.formatted_modified_date ? `<span>Modified: ${file.formatted_modified_date}</span>` : ''}
+                        ${file.formatted_taken_date ? `<span>Taken: ${file.formatted_taken_date}</span>` : ''}
+                    </div>
+                `;
+                
+                // EXIF toggle button (in top bar)
+                const exifToggleTop = document.createElement('div');
+                exifToggleTop.className = 'metadata-exif-toggle-top';
+                const hasExif = file.exif_data && Object.keys(file.exif_data).length > 0;
+                exifToggleTop.style.cssText = `
+                    padding: 6px 12px;
+                    border-radius: 4px;
+                    cursor: ${hasExif ? 'pointer' : 'default'};
+                    font-size: 11px;
+                    white-space: nowrap;
+                    margin-left: 10px;
+                `;
+                exifToggleTop.innerHTML = hasExif ? 
+                    `${this.metadataPanelVisible ? '📊 Hide Details' : '📊 Show Details'}` : 
+                    '📊 No Details';
+                exifToggleTop.title = hasExif ? 
+                    (this.metadataPanelVisible ? 'Hide detailed metadata' : 'Show detailed metadata') : 
+                    'No additional metadata available';
+                
+                topMetadata.appendChild(basicInfo);
+                if (hasExif) topMetadata.appendChild(exifToggleTop);
+                
+                // Create right-side EXIF panel
+                const rightPanel = document.createElement('div');
+                rightPanel.className = 'lightbox-metadata';
+                
+                // Navigation instructions (in right panel)
                 const navInstructions = document.createElement('div');
                 navInstructions.className = 'metadata-navigation';
-                navInstructions.innerHTML = 'Use ← → arrow keys or swipe left/right to navigate';
-                metadataDiv.appendChild(navInstructions);
+                navInstructions.style.cssText = 'font-size: 9px; opacity: 0.6; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.1);';
+                navInstructions.innerHTML = 'Use ← → keys or swipe to navigate';
+                rightPanel.appendChild(navInstructions);
                 
-                // EXIF data (if available)
-                if (file.exif_data && Object.keys(file.exif_data).length > 0) {
+                // EXIF data container
+                const exifContainer = document.createElement('div');
+                exifContainer.className = 'metadata-exif-container';
+                
+                if (hasExif) {
                     const exifDiv = this.createExifSection(file.exif_data);
-                    metadataDiv.appendChild(exifDiv);
+                    exifContainer.appendChild(exifDiv);
                 } else {
                     debugLog('No EXIF data found or EXIF data is empty');
                 }
                 
-                return metadataDiv;
+                rightPanel.appendChild(exifContainer);
+                
+                // Toggle functionality for EXIF panel
+                if (hasExif) {
+                    exifToggleTop.addEventListener('click', () => {
+                        this.metadataPanelVisible = !this.metadataPanelVisible;
+                        rightPanel.style.display = this.metadataPanelVisible ? 'block' : 'none';
+                        exifToggleTop.innerHTML = this.metadataPanelVisible ? '📊 Hide Details' : '📊 Show Details';
+                        exifToggleTop.title = this.metadataPanelVisible ? 'Hide detailed metadata' : 'Show detailed metadata';
+                    });
+                }
+                
+                return { topMetadata, rightPanel, exifContainer };
             }
             
             createExifSection(exifData) {
                 const exifDiv = document.createElement('div');
                 exifDiv.className = 'metadata-exif';
+                exifDiv.style.cssText = 'margin-top: 6px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 6px;';
                 
                 const exifToggle = document.createElement('div');
                 exifToggle.className = 'exif-toggle';
+                exifToggle.style.cssText = 'font-size: 11px; padding: 3px 6px; background: rgba(255,255,255,0.1); border-radius: 3px; cursor: pointer; text-align: center;';
                 exifToggle.innerHTML = this.exifToggleExpanded ? 'EXIF Data ▲' : 'EXIF Data ▼';
                 exifToggle.addEventListener('click', () => {
                     const exifDetails = exifDiv.querySelector('.exif-details');
@@ -3715,13 +3933,14 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 
                 const exifDetails = document.createElement('div');
                 exifDetails.className = 'exif-details';
+                exifDetails.style.cssText = 'margin-top: 4px; font-size: 10px; max-height: 200px; overflow-y: auto;';
                 exifDetails.style.display = this.exifToggleExpanded ? 'block' : 'none';
                 
                 // Format EXIF data
                 let exifContent = '';
                 for (const [key, value] of Object.entries(exifData)) {
                     if (value && value !== '' && value !== 'Unknown') {
-                        exifContent += `<div class="exif-item"><strong>${key}:</strong> ${value}</div>`;
+                        exifContent += `<div style="margin-bottom: 2px; opacity: 0.9;"><strong>${key}:</strong> ${value}</div>`;
                     }
                 }
                 exifDetails.innerHTML = exifContent;
@@ -3737,12 +3956,11 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 try {
                     // Show loading indicator if priority load
                     if (priority) {
-                        const metadataDiv = this.lightboxContent.querySelector('.lightbox-metadata');
-                        if (metadataDiv) {
-                            const loadingDiv = document.createElement('div');
-                            loadingDiv.className = 'metadata-loading';
-                            loadingDiv.innerHTML = '<div class="metadata-toggle">Loading media details...</div>';
-                            metadataDiv.appendChild(loadingDiv);
+                        const compactToggle = this.lightboxContent.querySelector('.metadata-toggle-compact');
+                        if (compactToggle) {
+                            compactToggle.innerHTML = '⏳';
+                            compactToggle.title = 'Loading media details...';
+                            compactToggle.classList.add('metadata-loading');
                         }
                     }
                     
@@ -3765,9 +3983,11 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                         // If this is the currently displayed file, update the metadata display
                         if (fileIndex === this.currentIndex && this.lightbox.classList.contains('active')) {
                             // Remove loading indicator
-                            const loadingDiv = this.lightboxContent.querySelector('.metadata-loading');
-                            if (loadingDiv) {
-                                loadingDiv.remove();
+                            const compactToggle = this.lightboxContent.querySelector('.metadata-toggle-compact');
+                            if (compactToggle && compactToggle.classList.contains('metadata-loading')) {
+                                compactToggle.classList.remove('metadata-loading');
+                                compactToggle.innerHTML = 'ℹ️';
+                                compactToggle.title = 'Show media details';
                             }
                             
                             this.updateMetadataDisplay(this.allMediaFiles[fileIndex]);
@@ -3781,9 +4001,11 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                     debugError('Failed to load metadata for', filename, ':', error);
                     
                     // Remove loading indicator on error
-                    const loadingDiv = this.lightboxContent.querySelector('.metadata-loading');
-                    if (loadingDiv) {
-                        loadingDiv.remove();
+                    const compactToggle = this.lightboxContent.querySelector('.metadata-toggle-compact');
+                    if (compactToggle && compactToggle.classList.contains('metadata-loading')) {
+                        compactToggle.classList.remove('metadata-loading');
+                        compactToggle.innerHTML = '❌';
+                        compactToggle.title = 'Failed to load media details';
                     }
                     
                     return null;
@@ -3793,27 +4015,34 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             updateMetadataDisplay(file) {
                 if (!file.lazy_metadata) return;
                 
-                const metadataDiv = this.lightboxContent.querySelector('.lightbox-metadata');
-                if (!metadataDiv) return;
+                const topMetadata = this.lightboxContent.querySelector('.lightbox-metadata-top');
+                const rightPanel = this.lightboxContent.querySelector('.lightbox-metadata-right');
+                const exifContainer = this.lightboxContent.querySelector('.metadata-exif-container');
+                if (!topMetadata || !rightPanel || !exifContainer) return;
                 
-                // Add duration info for video/audio
-                if (file.lazy_metadata.metadata && file.lazy_metadata.metadata.duration) {
-                    const duration = this.formatDuration(file.lazy_metadata.metadata.duration);
-                    const basicMetadata = metadataDiv.querySelector('.metadata-basic');
-                    if (basicMetadata && !basicMetadata.querySelector('.duration')) {
+                // Add duration info for video/audio to top metadata bar
+                if (file.lazy_metadata.metadata && file.lazy_metadata.metadata.Duration) {
+                    const basicInfo = topMetadata.querySelector('.metadata-basic-info');
+                    if (basicInfo && !basicInfo.querySelector('.duration')) {
                         const durationSpan = document.createElement('span');
-                        durationSpan.className = 'duration filesize';
-                        durationSpan.textContent = `Duration: ${duration}`;
-                        basicMetadata.appendChild(durationSpan);
+                        durationSpan.className = 'duration';
+                        durationSpan.style.cssText = 'color: #3498db; font-weight: bold;';
+                        durationSpan.textContent = `Duration: ${file.lazy_metadata.metadata.Duration}`;
+                        
+                        // Add to the info row
+                        const infoRow = basicInfo.querySelector('div:last-child');
+                        if (infoRow) {
+                            infoRow.appendChild(durationSpan);
+                        }
                     }
                 }
                 
-                // Add detailed metadata section
+                // Add detailed metadata section to EXIF container
                 if (file.lazy_metadata.metadata && Object.keys(file.lazy_metadata.metadata).length > 0) {
-                    const existingDetails = metadataDiv.querySelector('.metadata-details');
+                    const existingDetails = exifContainer.querySelector('.metadata-details');
                     if (!existingDetails) {
                         const detailsDiv = this.createDetailedMetadataSection(file.lazy_metadata.metadata);
-                        metadataDiv.appendChild(detailsDiv);
+                        exifContainer.appendChild(detailsDiv);
                     }
                 }
             }
@@ -3825,6 +4054,7 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 const toggleDiv = document.createElement('div');
                 toggleDiv.className = 'metadata-toggle';
                 toggleDiv.innerHTML = 'Media Details ▼';
+                toggleDiv.style.cssText = 'margin-top: 6px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 6px;';
                 
                 const contentDiv = document.createElement('div');
                 contentDiv.className = 'metadata-content';
@@ -3840,10 +4070,11 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 for (const [key, value] of Object.entries(metadata)) {
                     if (value && value !== '' && value !== 'Unknown') {
                         const displayKey = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-                        if (key === 'duration') {
-                            content += `<div><strong>${displayKey}:</strong> ${this.formatDuration(value)}</div>`;
+                        if (key === 'Duration' || key === 'duration') {
+                            // Duration is already formatted from the server
+                            content += `<div style="margin-bottom: 3px;"><strong style="color: #3498db;">${displayKey}:</strong> ${value}</div>`;
                         } else {
-                            content += `<div><strong>${displayKey}:</strong> ${value}</div>`;
+                            content += `<div style="margin-bottom: 3px;"><strong>${displayKey}:</strong> ${value}</div>`;
                         }
                     }
                 }
@@ -3970,6 +4201,15 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 if (index >= this.allMediaFiles.length) index = 0;
                 
                 this.currentIndex = index;
+                
+                // Store current metadata panel state before clearing content
+                const currentRightPanel = this.lightboxContent.querySelector('.lightbox-metadata-right');
+                if (currentRightPanel) {
+                    // Only update state if panel exists (preserves state during navigation)
+                    this.metadataPanelVisible = currentRightPanel.style.display !== 'none';
+                }
+                // If no panel exists yet, use the current class property value (for first load)
+                
                 this.lightboxContent.innerHTML = '';
                 
                 const file = this.allMediaFiles[index];
@@ -3991,8 +4231,22 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 }
                 
                 // Add metadata (for non-PDF files)
-                const metadata = this.createMetadata(file);
-                this.lightboxContent.appendChild(metadata);
+                const metadataComponents = this.createMetadata(file);
+                this.lightboxContent.appendChild(metadataComponents.topMetadata);
+                this.lightboxContent.appendChild(metadataComponents.rightPanel);
+                
+                // Apply the preserved state to right panel
+                if (metadataComponents.rightPanel) {
+                    const hasExif = file.exif_data && Object.keys(file.exif_data).length > 0;
+                    metadataComponents.rightPanel.style.display = (this.metadataPanelVisible && hasExif) ? 'block' : 'none';
+                    
+                    // Update toggle button in top bar
+                    const exifToggleTop = metadataComponents.topMetadata.querySelector('.metadata-exif-toggle-top');
+                    if (exifToggleTop && hasExif) {
+                        exifToggleTop.innerHTML = this.metadataPanelVisible ? '📊 Hide Details' : '📊 Show Details';
+                        exifToggleTop.title = this.metadataPanelVisible ? 'Hide detailed metadata' : 'Show detailed metadata';
+                    }
+                }
                 
                 // Priority load metadata for video/audio files when clicked
                 if (file.type && (file.type.includes('video') || file.type.includes('audio'))) {
@@ -4001,6 +4255,25 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                     } else {
                         // Metadata already loaded, update display immediately
                         this.updateMetadataDisplay(file);
+                    }
+                    
+                    // Auto-play audio files if enabled
+                    if (file.type.includes('audio') && this.autoPlayEnabled) {
+                        // Small delay to ensure lightbox is fully displayed
+                        setTimeout(() => {
+                            const normalizedPath = file.path.replace(/\\/g, '/');
+                            const pathParts = normalizedPath.split('/');
+                            const encodedFilename = encodeURIComponent(pathParts.pop());
+                            const pathDir = pathParts.join('/');
+                            const audioPath = pathDir + '/' + encodedFilename;
+                            const filename = file.path.split('/').pop().split('\\').pop();
+                            
+                            debugLog('Auto-playing audio:', filename);
+                            if (window.audioPlayer) {
+                                window.audioPlayer.load(audioPath, filename);
+                                window.audioPlayer.play();
+                            }
+                        }, 100);
                     }
                 }
             }
@@ -4050,6 +4323,20 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                 this.lightbox.addEventListener('click', (e) => {
                     if (e.target === this.lightbox) {
                         this.closeLightbox();
+                    }
+                });
+                
+                // Global click handler for metadata panel outside clicks
+                document.addEventListener('click', (e) => {
+                    const exifToggleTop = this.lightboxContent?.querySelector('.metadata-exif-toggle-top');
+                    const rightPanel = this.lightboxContent?.querySelector('.lightbox-metadata-right');
+                    
+                    if (this.metadataPanelVisible && exifToggleTop && rightPanel &&
+                        !rightPanel.contains(e.target) && !exifToggleTop.contains(e.target)) {
+                        this.metadataPanelVisible = false;
+                        rightPanel.style.display = 'none';
+                        exifToggleTop.innerHTML = '📊 Show Details';
+                        exifToggleTop.title = 'Show detailed metadata';
                     }
                 });
                 
@@ -4241,6 +4528,26 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
                     
                     // Apply size after short delay to ensure all elements are loaded
                     setTimeout(() => this.updateThumbnailSize(slider.value), 100);
+                }
+            }
+            
+            // Auto-play toggle control
+            setupAutoPlayToggle() {
+                const toggle = document.getElementById('autoPlayToggle');
+                if (toggle) {
+                    // Load saved auto-play preference
+                    const savedAutoPlay = localStorage.getItem('autoPlayEnabled');
+                    if (savedAutoPlay !== null) {
+                        this.autoPlayEnabled = savedAutoPlay === 'true';
+                        toggle.checked = this.autoPlayEnabled;
+                    }
+                    
+                    // Setup change handler
+                    toggle.addEventListener('change', () => {
+                        this.autoPlayEnabled = toggle.checked;
+                        localStorage.setItem('autoPlayEnabled', this.autoPlayEnabled);
+                        debugLog('Auto-play toggled:', this.autoPlayEnabled ? 'enabled' : 'disabled');
+                    });
                 }
             }
             
@@ -4616,7 +4923,7 @@ if ($current_dir_name == '.' || $current_dir_name == '') {
             window.gallery = new InstantGallery();
             
             // Generate PDF thumbnails after initial load
-            setTimeout(generatePDFThumbnails, 500);
+            setTimeout(generatePDFThumbnails, 300);
             
             // Close page selector when clicking outside
             document.addEventListener('click', function(e) {
